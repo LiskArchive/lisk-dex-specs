@@ -1,0 +1,1773 @@
+```
+LIP: <LIP number>
+Title: Define liquidity provider interactions for DEX module
+Author: Jan Hackfeld <jan.hackfeld@lightcurve.io>
+Discussions-To: <Link to discussion in Lisk Research>
+Type: Standards Track
+Created: <YYYY-MM-DD>
+Updated: <YYYY-MM-DD>
+Requires:
+```
+
+## Abstract
+
+This LIP describes the internal functions, commands, APIs and endpoints related to liquidity provider interactions of the DEX module.
+
+## Copyright
+
+This LIP is licensed under the [Creative Commons Zero 1.0 Universal](https://creativecommons.org/publicdomain/zero/1.0/).
+
+## Motivation
+
+The motivation for this proposal is provided in the ["Define DEX module" LIP][lip-define-dex-module].
+
+## Rationale
+
+The general rational for the DEX module is provided in the ["Define DEX module" LIP][lip-define-dex-module]. In the following sections, we want to explain the rationale for the commands introduced in this LIP.
+
+### Create-Pool Command
+
+This command creates a new pool for a given pair of tokens and a fee tier together with an initial position for that pool.
+The main reasons for including the creation of a first position with the pool creation is that it ensures that the blockchain in which the pool is created contains liquidity in both tokens of the pool.
+Although the pool creator can immediately remove the position afterwards, it further incentives the pool creator to choose a meaningful initial price as otherwise other participants could immediately arbitrage after the pool creation.
+Finally, the command includes a parameter `maxTimestampValid` to allow the command to time out which can be useful as the initial price will become outdated after a while.
+
+### Create-Position Command
+
+This commands allows to create a new position in an existing pool by providing the tick boundaries and a desired and minimum amount of tokens for each of the two tokens in the pool.
+The lower and upper bound on each of the token amounts ensures that a liquidity provider only adds liquidity at an exchange rate similar to the one when issuing the command, thus protecting against slippage.
+For instance, assume a liquidity provider adds a maximum of 100 `tokenA` and 200 `tokenB` over the full price range (the current price is 2 `tokenB` for 1 `tokenA`) with a minimum of 95 `tokenA` and 190 `tokenB`.
+Then, in case there is a large swap just before the position creation changing the price to 1 `tokenB` for `tokenA`, the position creation will fail instead of the liquidity provider adding liquidity add an undesirable price.
+This means that this mechanism in particular mitigates price manipulation with large swaps at the disadvantage of liquidity providers.
+Finally, the command also includes a parameter `maxTimestampValid` to allow the command to time out which can be useful as the  price on which the minimum and maximum amounts of tokens are based will become outdated after a while.
+
+### Add-Liquidity Command
+
+This command allows to add liquidity to an existing position.
+The input parameters are the same as for the create-position command except for that instead of the pool ID and tick boundaries, only the position ID is provided.
+The rationale for the add-liquidity command is therefore also the same as for the create-position command as the same mechanism for slippage protection is used and it also uses the parameter `maxTimestampValid` for timeout.
+Note that during the command execution, the collected fees are transferred to the position owner.
+This has the advantage that it simplifies the state transition logic and additionally allows to collect and reinvest fees with just one command.
+
+### Remove-Liquidity Command
+
+This command allows to remove liquidity from an existing position by specifying the amount of liquidity to remove and the minimum amount of each token to remove as slippage protection.
+For this command we use the liquidity instead of the desired amounts of each token to remove, as this allows to easily handle the case where the command issuer wants to remove all liquidity from a position.
+If the desired amounts were used instead, it would be difficult to avoid that a negligible amount of liquidity is left in the position due to rounding.
+Additionally, the command is more in line with the preferred user interactions on the front-end.
+When removing liquidity, users would select the percentage of liquidity to remove instead of the maximum amounts for each token.
+Similarly as for the case of adding liquidity, the parameter `maxTimestampValid` introduces a timeout which can be useful as the price on which the minimum amounts of tokens are based will become outdated after a while.
+
+### Collect-Fees Command
+
+This command allows to collect the accumulated fees for all the provided positions given that the command issuer is the position owner.
+Note that when adding or removing liquidity the fees are already automatically transferred to the position owner.
+This command is therefore added for convenience in case a liquidity provider wants to easily collect fees from multiple positions at once.
+
+## Specification
+
+### Constants
+
+The constants used in these specifications are defined in the section [Notation and Constants][lip-define-dex-module] of the "Define DEX module" LIP.       
+
+| Name                                       | Type     | Value  | Description                                         |
+|--------------------------------------------|----------|--------|-----------------------------------------------------|
+| `POOL_CREATION_SUCCESS`                    | `uint32` | 0      | Return code for successful pool creation.           |     
+| `POOL_CREATION_FAILED_INVALID_FEE_TIER`    | `uint32` | 1      | Return code for failed pool creation due to an invalid fee tier in the pool creation. |     
+| `POOL_CREATION_FAILED_ALREADY_EXISTS`      | `uint32` | 2      | Return code for failed pool creation due to an already existing pool. |
+| `POSITION_CREATION_SUCCESS`                | `uint32` | 0      | Return code for successful position creation.       |     
+| `POSITION_CREATION_FAILED_NO_POOL`         | `uint32` | 1      | Return code for failed position creation due to a non-existing pool. |     
+| `POSITION_CREATION_FAILED_INVALID_TICK_SPACING` | `uint32` | 2   | Return code for failed position creation due to a invalid tick spacing. |
+| `POSITION_CREATION_FAILED_INVALID_TICKS`   | `uint32` | 3   | Return code for failed position creation due to a invalid ticks. |          
+| `POSITION_UPDATE_FAILED_NOT_EXISTS`        | `uint32` | 1      | Return code for failed position update as position does not exist. |
+| `POSITION_UPDATE_FAILED_NOT_OWNER`         | `uint32` | 2      | Return code for failed position update as position owner is different from transaction sender. |
+| `POSITION_UPDATE_FAILED_INSUFFICIENT_LIQUIDITY` | `uint32` | 3      | Return code for failed position update as transaction sender is not position owner. |
+| `TOKEN_ID_LSK`                    | `bytes` |  0x 00 00 00 01 00 00 00 00   | The token ID of the LSK token.           |     
+| `TOKEN_ID_REWARDS`                    | `bytes` |  TBD   | The token ID of the token used for liquidity provider incentives.           |     
+
+### Events
+
+#### AmountBelowMin
+
+This event is emitted whenever the computed amount added to a position is below the required minimum which makes a command fail.
+The type ID of the event is `TYPE_ID_AMOUNT_BELOW_MIN`.
+
+##### Topics
+
+* `senderAddress`: The address adding liquidity to the position.
+
+##### Data
+
+```java
+amountBelowMinEventDataSchema = {
+    "type": "object",
+    "required": [
+        "senderAddress",
+        "amount0",
+        "amount0Min",
+        "tokenID0",
+        "amount1",
+        "amount1Min",
+        "tokenID1"
+    ],
+    "properties": {
+        "senderAddress": {
+            "dataType": "bytes",
+            "fieldNumber": 1
+        },
+        "amount0": {
+            "dataType": "uint64",
+            "fieldNumber": 2
+        },
+        "amount0Min": {
+            "dataType": "uint64",
+            "fieldNumber": 3
+        },
+        "tokenID0": {
+            "dataType": "bytes",
+            "fieldNumber": 4
+        },
+        "amount1": {
+            "dataType": "uint64",
+            "fieldNumber": 5
+        },
+        "amount1Min": {
+            "dataType": "uint64",
+            "fieldNumber": 6
+        },
+        "tokenID1": {
+            "dataType": "bytes",
+            "fieldNumber": 7
+        }
+    }
+}
+```
+
+#### FeesIncentivesCollected
+
+This event is emitted whenever fees and incentives are collected by a position owner.
+The type ID of the event is `TYPE_ID_FEES_INCENTIVES_COLLECTED`.
+
+##### Topics
+
+* `senderAddress`: The address of the position owner.
+* `positionID`: The ID of the position for which fees and incentives are collected.
+
+
+##### Data
+
+```java
+feesIncentivesCollectedEventDataSchema = {
+    "type": "object",
+    "required": [
+        "senderAddress",
+        "positionID",
+        "collectedFees0",
+        "tokenID0",
+        "collectedFees1",
+        "tokenID1",
+        "collectedIncentives",
+        "tokenIDIncentives"
+    ],
+    "properties": {
+        "senderAddress": {
+            "dataType": "bytes",
+            "fieldNumber": 1
+        },
+        "positionID": {
+            "dataType": "bytes",
+            "fieldNumber": 2
+        },
+        "collectedFees0": {
+            "dataType": "uint64",
+            "fieldNumber": 3
+        },
+        "tokenID0": {
+            "dataType": "bytes",
+            "fieldNumber": 4
+        },
+        "collectedFees1": {
+            "dataType": "uint64",
+            "fieldNumber": 5
+        },
+        "tokenID1": {
+            "dataType": "bytes",
+            "fieldNumber": 6
+        },
+        "collectedIncentives": {
+            "dataType": "uint64",
+            "fieldNumber": 7
+        },
+        "tokenIDIncentives": {
+            "dataType": "bytes",
+            "fieldNumber": 8
+        }
+    }
+}
+```
+
+
+#### PoolCreated
+
+This event is emitted whenever a pool is successfully created.
+The type ID of the event is `TYPE_ID_POOL_CREATED`.
+
+##### Topics
+
+* `senderAddress`: The address of the transaction sender creating the pool.
+* `poolID`: The ID of the newly created pool.
+
+
+##### Data
+
+```java
+poolCreatedEventDataSchema = {
+    "type": "object",
+    "required":  ["senderAddress", "poolID", "tokenID0", "tokenID1", "feeTier"],
+    "properties": {
+        "senderAddress": {
+            "dataType": "bytes",
+            "fieldNumber": 1
+        },
+        "poolID": {
+            "dataType": "bytes",
+            "fieldNumber": 2
+        },
+        "tokenID0": {
+            "dataType": "bytes",
+            "fieldNumber": 3
+        },
+        "tokenID1": {
+            "dataType": "bytes",
+            "fieldNumber": 4
+        },
+        "feeTier": {
+            "dataType": "uint32",
+            "fieldNumber": 5
+        }
+    }
+}
+```
+
+#### PoolCreationFailed
+
+This event is emitted whenever the pool creation fails and it provides information about the failure reason.
+The type ID of the event is `TYPE_ID_POOL_CREATION_FAILED`.
+
+##### Topics
+
+* `senderAddress`: The address of the transaction sender attempting to create the pool.
+
+
+##### Data
+
+```java
+poolCreationFailedEventDataSchema = {
+    "type": "object",
+    "required":  ["senderAddress", "tokenID0", "tokenID1", "feeTier", "result"],
+    "properties": {
+        "senderAddress": {
+            "dataType": "bytes",
+            "fieldNumber": 1
+        },
+        "tokenID0": {
+            "dataType": "bytes",
+            "fieldNumber": 2
+        },
+        "tokenID1": {
+            "dataType": "bytes",
+            "fieldNumber": 3
+        },
+        "feeTier": {
+            "dataType": "uint32",
+            "fieldNumber": 4
+        },
+        "result": {
+            "dataType": "uint32",
+            "fieldNumber": 5
+        }
+    }
+}
+```
+
+Note that `result` is an integer in `{POOL_CREATION_FAILED_INVALID_FEE_TIER, POOL_CREATION_FAILED_ALREADY_EXISTS}`.
+
+#### PositionCreated
+
+This event is emitted whenever a position is successfully created.
+The type ID of the event is `TYPE_ID_POSITION_CREATED`.
+
+##### Topics
+
+* `senderAddress`: The address of the transaction sender creating the position.
+* `poolID`: The ID of the pool for which the position was created.
+* `positionID`: The ID of the newly created position.
+
+##### Data
+
+```java
+positionCreatedEventDataSchema = {
+    "type": "object",
+    "required": [
+        "senderAddress",
+        "positionID",
+        "tickLower",
+        "tickUpper",
+        "amount0",
+        "tokenID0",
+        "amount1",
+        "tokenID1"
+    ],
+    "properties": {
+        "senderAddress": {
+            "dataType": "bytes",
+            "fieldNumber": 1
+        },
+        "positionID": {
+            "dataType": "bytes",
+            "fieldNumber": 2
+        },
+        "tickLower": {
+            "dataType": "sint32",
+            "fieldNumber": 2
+        },
+        "tickUpper": {
+            "dataType": "sint32",
+            "fieldNumber": 3
+        },
+        "amount0": {
+            "dataType": "uint64",
+            "fieldNumber": 4
+        },
+        "tokenID0": {
+            "dataType": "bytes",
+            "fieldNumber": 5
+        },
+        "amount1": {
+            "dataType": "uint64",
+            "fieldNumber": 6
+        },
+        "tokenID1": {
+            "dataType": "bytes",
+            "fieldNumber": 7
+        }
+    }
+}
+```
+
+#### PositionCreationFailed
+
+This event is emitted whenever the position creation fails and it provides information about the failure reason.
+The type ID of the event is `TYPE_ID_POSITION_CREATION_FAILED`.
+
+##### Topics
+
+* `senderAddress`: The address of the transaction sender attempting to create the pool.
+
+##### Data
+
+```java
+positionCreationFailedEventDataSchema = {
+    "type": "object",
+    "required": ["senderAddress", "poolID", "tickLower", "tickUpper", "result"],
+    "properties": {
+        "senderAddress": {
+            "dataType": "bytes",
+            "fieldNumber": 1
+        },
+        "poolID": {
+            "dataType": "bytes",
+            "fieldNumber": 2
+        },
+        "tickLower": {
+            "dataType": "sint32",
+            "fieldNumber": 3
+        },
+        "tickUpper": {
+            "dataType": "sint32",
+            "fieldNumber": 4
+        },
+        "result": {
+            "dataType": "uint32",
+            "fieldNumber": 5
+        }
+    }
+}
+```
+
+Note that `result` is an integer in `{POSITION_CREATION_FAILED_NO_POOL, POSITION_CREATION_FAILED_INVALID_TICK_SPACING}`.
+
+#### PositionUpdated
+
+This event is emitted whenever a position is updated by adding or removing liquidity.
+The type ID of the event is `TYPE_ID_POSITION_UDPATED`.
+
+##### Topics
+
+* `senderAddres`: The address of the position owner adding or removing liquidity.
+* `positionID`: The ID of the position for which the liquidity changed.
+
+##### Data
+
+```java
+positionUpdatedEventDataSchema = {
+    "type": "object",
+    "required":  ["senderAddres", "positionID", "amount0", "tokenID0", "amount1", "tokenID1"],
+    "properties": {
+        "senderAddres": {
+            "dataType": "bytes",
+            "fieldNumber": 1
+        },
+        "positionID": {
+            "dataType": "bytes",
+            "fieldNumber": 2
+        },
+        "amount0": {
+            "dataType": "sint64",
+            "fieldNumber": 3
+        },
+        "tokenID0": {
+            "dataType": "bytes",
+            "fieldNumber": 4
+        },
+        "amount1": {
+            "dataType": "sint64",
+            "fieldNumber": 5
+        },
+        "tokenID1": {
+            "dataType": "bytes",
+            "fieldNumber": 6
+        }
+    }
+}
+```
+
+#### PositionUpdateFailed
+
+This event is emitted whenever an update of a position fails.
+The type ID of the event is `TYPE_ID_POSITION_UDPATE_FAILED`.
+
+##### Topics
+
+* `senderAddress`: The address of the transaction sender attempting to update the position.
+* `positionID`: The ID of the position for which the update failed.
+
+##### Data
+
+```java
+positionUpdateFailedEventDataSchema = {
+    "type": "object",
+    "required": ["senderAddress", "positionID", "result"],
+    "properties": {
+        "senderAddress": {
+            "dataType": "bytes",
+            "fieldNumber": 1
+        },
+        "positionID": {
+            "dataType": "bytes",
+            "fieldNumber": 2
+        },
+        "result": {
+            "dataType": "uint32",
+            "fieldNumber": 3
+        }
+    }
+}
+```
+
+### Commands
+
+#### Create-Pool Command
+
+The create-pool command allows to create a new pool for a pair of tokens and a given fee tier.
+This command has command ID `COMMAND_ID_CREATE_POOL`.
+
+##### Parameters
+
+The `params` property of create-pool transactions follows the schema `createPoolSchema` defined below.
+
+```java
+createPoolSchema = {
+    "type": "object",
+    "required": [
+        "tokenID0",
+        "tokenID1",
+        "feeTier",
+        "tickInitialPrice",
+        "initialPosition",
+        "maxTimestampValid"
+    ],
+    "properties": {
+        "tokenID0": {
+            "dataType": "bytes",
+            "fieldNumber": 1
+        },
+        "tokenID1": {
+            "dataType": "bytes",
+            "fieldNumber": 2
+        },
+        "feeTier": {
+            "dataType": "uint32",
+            "fieldNumber": 3
+        },
+        "tickInitialPrice": {
+            "dataType": "sint32",
+            "fieldNumber": 4
+        },
+        "initialPosition": {
+            "type": "object",
+            "fieldNumber": 5,
+            "required": [
+                "tickLower",
+                "tickUpper",
+                "amount0Desired",
+                "amount1Desired"
+            ],
+            "properties": {
+                "tickLower": {
+                    "dataType": "sint32",
+                    "fieldNumber": 1
+                },
+                "tickUpper": {
+                    "dataType": "sint32",
+                    "fieldNumber": 2
+                },
+                "amount0Desired": {
+                    "dataType": "uint64",
+                    "fieldNumber": 3
+                },
+                "amount1Desired": {
+                    "dataType": "uint64",
+                    "fieldNumber": 4
+                }
+            }
+        },
+        "maxTimestampValid": {
+            "dataType": "uint64",
+            "fieldNumber": 6
+        }
+    }
+}
+```
+
+- `tokenID0`: The ID of one of the two tokens for which a pool is created.
+- `tokenID1`: The ID of one of the two tokens for which a pool is created.
+- `feeTier`: The fee tier of the pool that is to be created. Note that only the fee tiers given in the protocol settings store of the DEX module can be chosen.
+- `tickInitialPrice`: The tick value corresponding to the initial sqrt price set for the pool.
+- `initialPosition`: The initial position to be created together with the pool. Creating a pool always requires creating an initial position at the same time.
+    - `tickLower`: The lower tick value of the position. Note that `tickLower % tickSpacing == 0` has to hold for the tick spacing corresponding to the fee tier of the pool.
+    - `tickUpper`: The upper tick value of the position. Note that `tickUpper % tickSpacing == 0` has to hold for the tick spacing corresponding to the fee tier of the pool.
+    - `amount0Desired`: The desired amount of `token0` to be added as liquidity to the position. The actual amount added as liquidity to the position will be at most `amount0Desired` and also depends on `tickInitialPrice`, `tickLower`, `tickUpper` and `amount1Desired`. The actual amount of `token0` added has to be positive, otherwise the command fails.
+    - `amount1Desired`: The desired amount of `token1` to be added as liquidity to the position. The actual amount added as liquidity to the position will be at most `amount1Desired` and also depends on `tickInitialPrice`, `tickLower`, `tickUpper` and `amount0Desired`. The actual amount of `token1` added has to be positive, otherwise the command fails.
+- `maxTimestampValid`: The timestamp of a block where a transaction with this command can be included.
+
+##### Verification
+
+```python
+def verify(trs: Transaction) -> None:
+    if trs.params does not satisfy createPoolSchema:
+        raise Exception()
+    if trs.params.tokenID0 >= trs.params.tokenID1 lexicographically:
+        raise Exception()
+    if trs.initialPosition.amount0Desired == 0 or trs.initialPosition.amount1Desired == 0:
+        raise Exception()
+    if MIN_TICK > trs.params.initialPosition.tickLower
+       or trs.params.initialPosition.tickLower > trs.params.tickInitialPrice
+       or trs.params.tickInitialPrice > trs.params.initialPosition.tickUpper
+       or trs.params.initialPosition.tickLower >= trs.params.initialPosition.tickUpper
+       or trs.params.initialPosition.tickUpper > MAX_TICK:
+       raise Exception()
+    if lastBlockheader.timestamp > trs.params.maxTimestampValid:
+        raise Exception()
+    if computePoolID(tokenID0, tokenID1, feeTier) exists in Pools substore:
+        raise Exception()
+```
+
+##### Execution
+
+```python
+def execute(trs: Transaction) -> None:
+    # create pool
+    senderAddress = address derived from trs.senderPublicKey
+    initialSqrtPrice = tickToPrice(trs.params.tickInitialPrice)
+    result = createPool(trs.params.tokenID0, trs.params.tokenID1, trs.params.feeTier, initialSqrtPrice)
+    if result != POOL_CREATION_SUCCESS:
+        # the pool creation failed and an event indicating the failure reason is emitted
+        emitPersistentEvent((
+            moduleID = MODULE_ID_DEX,
+            typeID = TYPE_ID_POOL_CREATION_FAILED,
+            data = {
+                "senderAddress": senderAddress,
+                "tokenID0": tokenID0,
+                "tokenID1": tokenID1,
+                "feeTier": feeTier,
+                "result": result
+            },
+            topics = [senderAddress]
+        )
+        raise Exception()
+
+    poolID = computePoolID(trs.params.tokenID0, trs.params.tokenID1, trs.params.feeTier)
+    # emit event about successful pool creation
+    emitEvent(
+        moduleID = MODULE_ID_DEX,
+        typeID = TYPE_ID_POOL_CREATED,
+        data = {
+            "senderAddress": senderAddress,
+            "poolID": poolID,
+            "tokenID0": trs.params.tokenID0,
+            "tokenID1": trs.params.tokenID1,
+            "feeTier":  trs.params.feeTier
+        },
+        topics = [
+            senderAddress,
+            poolID
+        ]
+    )
+
+    # create initial position
+    initialPosition = trs.params.initialPosition
+    (result, positionID) = createPosition(senderAddress, poolID, initialPosition.tickLower, initialPosition.tickUpper)
+    if result != POSITION_CREATION_SUCCESS:
+        emitPersistentEvent(
+            moduleID = MODULE_ID_DEX,
+            typeID = TYPE_ID_POSITION_CREATION_FAILED,
+            data = {
+                "senderAddres": senderAddress,
+                "poolID": poolID,
+                "tickLower": initialPosition.tickLower,
+                "tickUpper":  initialPosition.tickUpper,
+                "result": result
+            },
+            topics = [senderAddress]
+        )
+        raise Exception()
+
+    # add liquidity to position
+    tickLowerSqrtPrice = tickToPrice(initialPosition.tickLower)
+    tickUpperSqrtPrice = tickToPrice(initialPosition.tickUpper)
+    liquidity = getLiquidityForAmounts(initialSqrtPrice,
+                                       tickLowerSqrtPrice,
+                                       tickUpperSqrtPrice,
+                                       initialPosition.amount0Desired,
+                                       initialPosition.amount1Desired)
+    (amount0, amount1) = updatePosition(positionID, liquidity)
+
+    # require liquidity to be added in both tokens
+    if amount0 == 0 or amount1 == 0:
+        # emit event explaining why the command execution failed
+        emitPersistentEvent(
+            moduleID = MODULE_ID_DEX,
+            typeID = TYPE_ID_AMOUNT_BELOW_MIN,
+            data = {
+                "senderAddress": senderAddress,
+                "amount0": amount0,
+                "amount0Min": 1,
+                "tokenID0": trs.params.tokenID0,
+                "amount1": amount1,
+                "amount1Min": 1,
+                "tokenID1": trs.params.tokenID1,
+            },
+            topics = [senderAddress]
+        )
+        raise Exception()
+
+    # this condition should actually never satisfied, but is added as precaution
+    if amount0 > initialPosition.amount0Desired or amount1 > initialPosition.amount1Desired:
+        raise Exception()
+
+    # deduct pool creation fee
+    transferToProtocolFeeAccount(senderAddress, TOKEN_ID_FEE_DEX, POOL_CREATION_FEE)
+
+    # emit event about the successful position creation detailing the exact amounts added to the position
+    emitEvent(
+        moduleID = MODULE_ID_DEX,
+        typeID = TYPE_ID_POSITION_CREATED,
+        data = {
+            "senderAddress": senderAddress,
+            "positionID": positionID,
+            "tickLower": initialPosition.tickLower,
+            "tickUpper": initialPosition.tickUpper,
+            "amount0": amount0,
+            "tokenID0": trs.params.tokenID0,
+            "amount1": amount1,
+            "tokenID1": trs.params.tokenID1,
+        },
+        topics = [
+            senderAddress,
+            poolID,
+            positionID
+        ]
+    )
+```
+
+#### Create-Position Command
+
+This command lets a liquidity provider create a new position.
+This command has command ID `COMMAND_ID_CREATE_POSITION`.
+
+##### Parameters
+
+```java
+createPositionSchema = {
+    "type": "object",
+    "required": [
+        "poolID",
+        "tickLower",
+        "tickUpper",
+        "amount0Desired",
+        "amount1Desired",
+        "amount0Min",
+        "amount1Min",
+        "maxTimestampValid"
+    ],
+    "properties": {
+        "poolID": {
+            "dataType": "bytes",
+            "fieldNumber": 1
+        },
+        "tickLower": {
+            "dataType": "sint32",
+            "fieldNumber": 2
+        },
+        "tickUpper": {
+            "dataType": "sint32",
+            "fieldNumber": 3
+        },
+        "amount0Desired": {
+            "dataType": "uint64",
+            "fieldNumber": 4
+        },
+        "amount1Desired": {
+            "dataType": "uint64",
+            "fieldNumber": 5
+        },
+        "amount0Min": {
+            "dataType": "uint64",
+            "fieldNumber": 6
+        },
+        "amount1Min": {
+            "dataType": "uint64",
+            "fieldNumber": 7
+        },
+        "maxTimestampValid": {
+            "dataType": "uint64",
+            "fieldNumber": 8
+        }
+    }
+}
+```
+
+- `poolID`: The ID of the pool for which to create a new position.
+- `tickLower`: The lower tick value of the position that is supposed to be created.
+- `tickUpper`: The upper tick value of the position that is supposed to be created.
+- `amount0Desired`: The desired amount of `token0` to be added as liquidity to the position. The actual amount `amount0` of `token0` added has to be at least `amount0Min` and at most `amount0Desired`, otherwise the command fails.
+- `amount1Desired`: The desired amount of `token1` to be added as liquidity to the position. The actual amount `amount1` of `token1` added has to be at least `amount1Min` and at most `amount1Desired`, otherwise the command fails.
+- `amount0Min`: The minimum amount of `token0` to be added as liquidity to the position.
+- `amount1Min`: The minimum amount of `token1` to be added as liquidity to the position.
+- `maxTimestampValid`: The timestamp of a block where a transaction with this command can be included.
+
+##### Verification
+
+```python
+def verify(trs: Transaction) -> None:
+    if trs.params does not satisfy createPositionSchema:
+        raise Exception()
+    if MIN_TICK > trs.params.tickLower
+       or trs.params.tickLower >= trs.params.tickUpper
+       or trs.params.initialPosition.tickUpper > MAX_TICK:
+       raise Exception()
+    if amount0Min > amount0Desired or amount1Min > amount1Desired:
+        raise Exception()
+    if lastBlockheader.timestamp > trs.params.maxTimestampValid:
+        raise Exception()
+```
+
+##### Execution
+
+```python
+def execute(trs: Transaction) -> None:
+    # create position
+    senderAddress = address derived from trs.senderPublicKey
+    (result, positionID) = createPosition(senderAddress, trs.params.poolID, trs.params.tickLower, trs.params.tickUpper)
+    if result != POSITION_CREATION_SUCCESS:
+        emitPersistentEvent(
+            moduleID = MODULE_ID_DEX,
+            typeID = TYPE_ID_POSITION_CREATION_FAILED,
+            data = {
+                "senderAddress": senderAddress,
+                "poolID": trs.params.poolID,
+                "tickLower": trs.params.tickLower,
+                "tickUpper":  trs.params.tickUpper,
+                "result": result
+            },
+            topics = [senderAddress]
+        )
+        raise Exception()
+
+    # add liquidity to position                                
+    currentSqrtPrice = pools(trs.params.poolID).sqrtPrice
+    tickLowerSqrtPrice = tickToPrice(trs.params.tickLower)
+    tickUpperSqrtPrice = tickToPrice(trs.params.tickUpper)
+    liquidity = getLiquidityForAmounts(currentSqrtPrice,
+                                       tickLowerSqrtPrice,
+                                       tickUpperSqrtPrice,
+                                       trs.params.amount0Desired,
+                                       trs.params.amount1Desired)
+    (amount0, amount1) = updatePosition(positionID, liquidity)
+
+    # check that amounts are within desired range (no large price slippage occurred)
+    if amount0 < trs.params.amount0Min or amount1 < trs.params.amount1Min:
+        # emit event explaining why the command execution failed
+        emitPersistentEvent(
+            moduleID = MODULE_ID_DEX,
+            typeID = TYPE_ID_AMOUNT_BELOW_MIN,
+            data = {
+                "senderAddress": senderAddress,
+                "amount0": amount0,
+                "amount0Min": trs.params.amount0Min,
+                "tokenID0": trs.params.tokenID0,
+                "amount1": amount1,
+                "amount1Min": trs.params.amount1Min,
+                "tokenID1": trs.params.tokenID1,
+            },
+            topics = [senderAddress]
+        )
+        raise Exception()
+
+    # this condition should actually never satisfied, but is added as precaution
+    if amount0 > trs.params.amount0Desired or amount1 > trs.params.amount1Desired:
+        raise Exception()
+
+    # deduct position creation fee
+    transferToProtocolFeeAccount(senderAddress, TOKEN_ID_FEE_DEX, POSITION_CREATION_FEE)
+
+    # emit event about the successful position creation detailing the exact amounts added to the position
+    emitEvent(
+        moduleID = MODULE_ID_DEX,
+        typeID = TYPE_ID_POSITION_CREATED,
+        data = {
+            "senderAddress": senderAddress,
+            "positionID": positionID,
+            "tickLower": trs.params.tickLower,
+            "tickUpper":  trs.params.tickUpper,
+            "amount0": amount0,
+            "tokenID0": trs.params.tokenID0,
+            "amount1": amount1,
+            "tokenID1": trs.params.tokenID1,
+        },
+        topics = [
+            senderAddress,
+            poolID,
+            positionID
+        ]
+    )
+```
+
+#### Add-Liquidity Command
+
+This command lets a liquidity provider add liquidity to an existing position.
+Additionally, all fees collected by the position are transferred to the liquidity provider account.
+This command has command ID `COMMAND_ID_ADD_LIQUIDITY`.
+
+##### Parameters
+
+```java
+addLiquiditySchema = {
+    "type": "object",
+    "required": [
+        "positionID",
+        "amount0Desired",
+        "amount1Desired",
+        "amount0Min",
+        "amount1Min",
+        "maxTimestampValid"
+    ],
+    "properties": {
+        "positionID": {
+            "dataType": "bytes",
+            "fieldNumber": 1
+        },
+        "amount0Desired": {
+            "dataType": "uint64",
+            "fieldNumber": 2
+        },
+        "amount1Desired": {
+            "dataType": "uint64",
+            "fieldNumber": 3
+        },
+        "amount0Min": {
+            "dataType": "uint64",
+            "fieldNumber": 4
+        },
+        "amount1Min": {
+            "dataType": "uint64",
+            "fieldNumber": 5
+        },
+        "maxTimestampValid": {
+            "dataType": "uint64",
+            "fieldNumber": 6
+        }
+    }
+}
+```
+
+- `positionID`: The ID of the position to which to add liquidity.
+- `amount0Desired`: The desired amount of `token0` to be added as liquidity to the position. The actual amount `amount0` of `token0` added has to be at least `amount0Min` and at most `amount0Desired`, otherwise the command fails.
+- `amount1Desired`: The desired amount of `token1` to be added as liquidity to the position. The actual amount `amount1` of `token1` added has to be at least `amount1Min` and at most `amount1Desired`, otherwise the command fails.
+- `amount0Min`: The minimum amount of `token0` to be added as liquidity to the position.
+- `amount1Min`: The minimum amount of `token1` to be added as liquidity to the position.
+- `maxTimestampValid`: The timestamp of a block where a transaction with this command can be included.
+
+##### Verification
+
+```python
+def verify(trs: Transaction) -> None:
+    if trs.params does not satisfy addLiquiditySchema:
+        raise Exception()
+    if lastBlockheader.timestamp > trs.params.maxTimestampValid:
+        raise Exception()
+    if amount0Min > amount0Desired or amount1Min > amount1Desired:
+        raise Exception()
+```
+
+##### Execution
+
+```python
+def execute(trs: Transaction) -> None:
+    senderAddress = address derived from trs.senderPublicKey
+    checkPositionExistenceAndOwnership(senderAddress, trs.params.positionID)
+
+    # note that if a position exists, then a corresponding pool must exist
+    poolID = getPoolIDFromPositionID(trs.params.positionID)
+    currentSqrtPrice = pools(poolID).sqrtPrice
+    positionInfo = positions(positionID)
+    tickLowerSqrtPrice = tickToPrice(positionInfo.tickLower)
+    tickUpperSqrtPrice = tickToPrice(positionInfo.tickUpper)
+    senderAddress = address derived from trs.senderPublicKey
+    tokenID0 = getToken0Id(poolID)
+    tokenID1 = getToken1Id(poolID)
+
+    # add liquidity to position   
+    liquidity = getLiquidityForAmounts(currentSqrtPrice,
+                                       tickLowerSqrtPrice,
+                                       tickUpperSqrtPrice,
+                                       trs.params.amount0Desired,
+                                       trs.params.amount1Desired)
+    (amount0, amount1) = updatePosition(trs.params.positionID, liquidity)
+
+    # check that amounts are within desired range (no large price slippage occurred)
+    if amount0 < trs.params.amount0Min or amount1 < trs.params.amount1Min:
+        # emit event explaining why the command execution failed
+        emitPersistentEvent(
+            moduleID = MODULE_ID_DEX,
+            typeID = TYPE_ID_AMOUNT_BELOW_MIN,
+            data = {
+                "senderAddress": senderAddress,
+                "amount0": amount0,
+                "amount0Min": trs.params.amount0Min,
+                "tokenID0": tokenID0,
+                "amount1": amount1,
+                "amount1Min": trs.params.amount1Min,
+                "tokenID1": tokenID1,
+            },
+            topics = [senderAddress]
+        )
+        raise Exception()
+
+    # this condition should actually never satisfied, but is added as precaution
+    if amount0 > trs.params.amount0Desired or amount1 > trs.params.amount1Desired:
+        raise Exception()
+
+    # emit event detailing the exact amounts added to the position
+    emitEvent(
+        moduleID = MODULE_ID_DEX,
+        typeID = TYPE_ID_POSITION_UDPATED,
+        data = {
+            "senderAddres": senderAddress,
+            "positionID": positionID,
+            "amount0": amount0,
+            "tokenID0": tokenID0,
+            "amount1": amount1,
+            "tokenID1": tokenID1,
+        },
+        topics = [
+            senderAddress,
+            positionID
+        ]
+    )
+```
+
+#### Remove-Liquidity Command
+
+This command lets a liquidity provider remove liquidity from an existing position and, in particular, remove a position by removing all liquidity.
+Additionally, all fees collected by the position are transferred to the liquidity provider account.
+This command has command ID `COMMAND_ID_REMOVE_LIQUIDITY`.
+
+##### Parameters
+
+```java
+removeLiquiditySchema = {
+    "type": "object",
+    "required": [
+        "positionID",
+        "liquidityToRemove",
+        "amount0Min",
+        "amount1Min",
+        "maxTimestampValid"
+    ],
+    "properties": {
+        "positionID": {
+            "dataType": "bytes",
+            "fieldNumber": 1
+        },
+        "liquidityToRemove": {
+            "dataType": "uint64",
+            "fieldNumber": 2
+        },
+        "amount0Min": {
+            "dataType": "uint64",
+            "fieldNumber": 3
+        },
+        "amount1Min": {
+            "dataType": "uint64",
+            "fieldNumber": 4
+        },
+        "maxTimestampValid": {
+            "dataType": "uint64",
+            "fieldNumber": 5
+        }
+    }
+}
+```
+
+- `positionID`: The ID of the position from which to remove liquidity.
+- `liquidityToRemove`: The amount of liquidity to be removed from the position. If all liquidity is removed from the position, then the position is deleted.
+- `amount0Min`: The minimum amount of `token0` to be removed as liquidity from the position. The actual amount `amount0` of `token0` removed from the position has to be at least `amount0Min`, otherwise the command fails.
+- `amount1Min`: The minimum amount of `token1` to be removed as liquidity from the position. The actual amount `amount1` of `token1` removed from the position has to be at least `amount1Min`, otherwise the command fails.
+- `maxTimestampValid`: The timestamp of a block where a transaction with this command can be included.
+
+##### Verification
+
+```python
+def verify(trs: Transaction) -> None:
+    if trs.params does not satisfy removeLiquiditySchema:
+        raise Exception()
+    if lastBlockheader.timestamp > trs.params.maxTimestampValid:
+        raise Exception()
+```
+
+##### Execution
+
+```python
+def execute(trs: Transaction) -> None:
+    senderAddress = address derived from trs.senderPublicKey
+    checkPositionExistenceAndOwnership(senderAddress, trs.params.positionID)
+    (amount0, amount1) = updatePosition(trs.params.positionID, -trs.params.liquidityToRemove)
+    poolID = getPoolIDFromPositionID(trs.params.positionID)
+    tokenID0 = getToken0Id(poolID)
+    tokenID1 = getToken1Id(poolID)
+
+    if amount0 < trs.params.amount0Min or amount1 < trs.params.amount1Min:
+        # emit event explaining why the command execution failed
+        emitPersistentEvent(
+            moduleID = MODULE_ID_DEX,
+            typeID = TYPE_ID_AMOUNT_BELOW_MIN,
+            data = {
+                "senderAddress": senderAddress,
+                "amount0": amount0,
+                "amount0Min": trs.params.amount0Min,
+                "tokenID0": tokenID0,
+                "amount1": amount1,
+                "amount1Min": trs.params.amount1Min,
+                "tokenID1": tokenID1,
+            },
+            topics = [senderAddress]
+        )
+        raise Exception()
+
+    # emit event detailing the exact amounts added to the position
+    emitEvent(
+        moduleID = MODULE_ID_DEX,
+        typeID = TYPE_ID_POSITION_UDPATED,
+        data = {
+            "senderAddres": senderAddress,
+            "positionID": positionID,
+            "amount0": -amount0,
+            "tokenID0": tokenID0,
+            "amount1": -amount1,
+            "tokenID1": tokenID1,
+        },
+        topics = [
+            senderAddress,
+            positionID
+        ]
+    )
+```
+
+#### Collect-Fees Command
+
+The collect-fees command allows to collect the fees for multiple positions.
+This command has command ID `COMMAND_ID_COLLECT_FEES`.
+
+##### Parameters
+
+```java
+collectFeesSchema = {
+    "type": "object",
+    "required": ["positions"],
+    "properties": {
+        "positions": {
+            "type": "array",
+            "fieldNumber": 1,
+            "items": {
+                "type": "object",
+                "required": ["positionID"],
+                "properties": {
+                    "positionID": {
+                        "dataType": "bytes",
+                        "fieldNumber": 1
+                    }
+                }
+            }
+        }
+    }
+}
+```
+
+- `positions`: An array of the position IDs for which to collect the fees.
+
+##### Verification
+
+```python
+def verify(trs: Transaction) -> None:
+    if trs.params does not satisfy collectFeesSchema:
+        raise Exception()
+    if len(trs.params.positions) > MAX_NUM_POSITIONS_FEE_COLLECTION:
+        raise Exception()
+```
+
+##### Execution
+
+```python
+def execute(trs: Transaction) -> None:
+    senderAddress = address derived from trs.senderPublicKey
+    for positionID in trs.params.positions
+        checkPositionExistenceAndOwnership(senderAddress, positionID)
+        collectFeesAndIncentives(positionID)
+```
+
+### Internal Functions
+
+#### checkPositionExistenceAndOwnership
+
+This function checks that the position with the provided position ID exists and that it belongs to the address `senderAddress`.
+If this is not the case, a persistent event is emitted and an exception is raised.
+
+```python
+checkPositionExistenceAndOwnership(senderAddres: Address, positionID: PositionID) -> None:
+    # check position existence
+    if trs.params.positionID does not exist in Positions substore:
+        emitPersistentEvent(
+            moduleID = MODULE_ID_DEX,
+            typeID = TYPE_ID_POSITION_UDPATE_FAILED,
+            data = {
+                "senderAddress": senderAddress,
+                "positionID": positionID,
+                "result": POSITION_UPDATE_FAILED_NOT_EXISTS
+            },
+            # note here the position ID is not added here on purpose so that the events related to the position
+            # only relevant notifications about actions performed by the position owner
+            topics = [senderAddress]
+        )
+        raise Exception()
+    # check transaction sender is position owner
+    if senderAddress != getOwnerAddressOfPosition(positionID):
+        emitPersistentEvent(
+            moduleID = MODULE_ID_DEX,
+            typeID = TYPE_ID_POSITION_UDPATE_FAILED,
+            data = {
+                "senderAddress": senderAddress,
+                "positionID": positionID,
+                "result": POSITION_UPDATE_FAILED_NOT_OWNER
+            },
+            # note here the position ID is not added here on purpose so that the events related to the position
+            # only relevant notifications about actions performed by the position owner
+            topics = [senderAddress]
+        )
+        raise Exception()
+```
+
+
+#### collectFeesAndIncentives
+
+This function computes the share of fees and liquidity provider incentives earned by a position since the creation of the position or the last time the fees and incentives were collected.
+Both fees and incentives are transferred to the position owner.
+
+```python
+def collectFeesAndIncentives(positionID: PositionID) -> None:
+    poolID = getPoolIDFromPositionID(positionID)
+    positionInfo = position(positionID)
+    ownerAddress = getOwnerAddressOfPosition(positionID)
+    # compute collectable fees
+    (collectableFees0, collectableFees1, feeGrowthInside0, feeGrowthInside1) = computeCollectableFees(positionID)
+
+    # transfer fees to position owner and update position accordingly
+    if collectableFees0 > 0:
+        transferFromPool(poolID, ownerAddress, getToken0Id(poolID), collectableFees0)
+    if collectableFees1 > 0:
+        transferFromPool(poolID, ownerAddress, getToken1Id(poolID), collectableFees1)
+    positionInfo.feeGrowthInsideLast0 = feeGrowthInside0
+    positionInfo.feeGrowthInsideLast1 = feeGrowthInside1
+    position(positionID) = positionInfo
+
+    # compute collectable incentives
+    (collectableFeesLSK, incentivesForPosition) = computeCollectableIncentives(positionID, collectableFees0, collectableFees1)
+
+    # transfer incentives and update collectable LSK fees accordingly
+    Token.transfer(ADDRESS_LIQUIDITY_PROVIDERS_REWARDS_POOL, ownerAddress, TOKEN_ID_REWARDS, incentivesForPosition)
+    dexGlobalState.collectableLSKFees = dexGlobalState.collectableLSKFees - collectableFeesLSK
+
+    # emit an event providing information about the collected fees and incentives
+    emitEvent(
+        moduleID = MODULE_ID_DEX,
+        typeID = TYPE_ID_FEES_INCENTIVES_COLLECTED,
+        data = {
+            "senderAddress": senderAddress,
+            "positionID": positionID,
+            "collectedFees0": collectableFees0,
+            "tokenID0": getToken0Id(poolID),
+            "collectedFees1": collectableFees1,
+            "tokenID1": getToken1Id(poolID),
+            "collectedIncentives": incentivesForPosition,
+            "tokenIDIncentives": TOKEN_ID_REWARDS
+        },
+        topics = [
+            senderAddress,
+            positionID
+        ]
+    )
+```
+
+
+#### computeCollectableFees
+
+This function computes the fees that can be collected by the position owner.
+
+##### Parameters
+
+* `positionID`: The ID of the position for which to compute the fees that can be collected.
+
+##### Returns
+
+A tuple `(collectableFees0, collectableFees1, feeGrowthInside0, feeGrowthInside1)` where
+
+ * `collectableFees0`: The amount of fees in `token0` that can be collected by the position owner.
+ * `collectableFees1`: The amount of fees in `token1` that can be collected by the position owner.
+ * `feeGrowthInside0`: The fee growth in terms of token0, per unit of liquidity, between the tick boundaries of the position.
+ * `feeGrowthInside1`: The fee growth in terms of token1, per unit of liquidity, between the tick boundaries of the position.
+
+##### Execution
+
+```python
+def computeCollectableFees(positionID: PositionID) -> Tuple[uint64, uint64, Q96, Q96]:
+    # compute the accumulated fees per unit of liquidity
+    positionInfo = position(positionID)
+    poolID = getPoolIDFromPositionID(positionID)
+    (feeGrowthInside0, feeGrowthInside1) = getFeeGrowthInside(positionID)
+
+    # calculate collected fees
+    # note that collectableFees0 and collectableFees1 are uint64 integers and the collected fees may be smaller
+    # than the smallest token unit and therefore be rounded down to 0
+    collectableFees0 = roundDown_96(mul_96(sub_96(feeGrowthInside0, positionInfo.feeGrowthInsideLast0), positionInfo.liquidity))
+    collectableFees1 = roundDown_96(mul_96(sub_96(feeGrowthInside1, positionInfo.feeGrowthInsideLast1), positionInfo.liquidity))
+
+    return (collectableFees0, collectableFees1, feeGrowthInside0, feeGrowthInside1)
+```
+
+
+#### computeLiquidityProviderIncentives
+
+Given a position and the fees that are collectable for this position, this function computes the additional liquidity provider incentives for the position owner.
+
+##### Parameters
+
+* `positionID`: The ID of the position for which to collect the fees.
+* `collectableFees0`: The amount of fees in `token0` collected by the position owner.
+* `collectableFees1`: The amount of fees in `token1` collected by the position owner.
+
+##### Returns
+
+A tuple `(collectableFeesLSK, incentivesForPosition)` where
+
+* `collectableFeesLSK`: The amount of fees in LSK that can be collected.
+* `incentivesForPosition`: The amount of liquidity provider incentives in `TOKEN_ID_REWARDS`.
+
+##### Execution
+
+```python
+def computeCollectableIncentives(positionID: PositionID, collectableFees0: uint64, collectableFees1: uint64) -> uint64:
+    poolID = getPoolIDFromPositionID(positionID)
+    collectableFeesLSK = 0
+    if getToken0Id(poolID) == TOKEN_ID_LSK:
+        collectableFeesLSK = collectableFees0
+    elif getToken1Id(poolID) == TOKEN_ID_LSK:
+        collectableFeesLSK = collectableFees1
+
+    if collectableFeesLSK == 0:
+        return (0,0)
+
+    # compute LP incentives
+    totalCollectableLSKFees = dexGlobalState.collectableLSKFees
+    availableLPIncentives = Token.getAvailableBalance(ADDRESS_LIQUIDITY_PROVIDERS_REWARDS_POOL, TOKEN_ID_REWARDS)
+    incentivesForPosition = (availableLPIncentives * collectableFeesLSK) // totalCollectableLSKFees
+    return (collectableFeesLSK, incentivesForPosition)
+```
+
+
+#### computePoolID
+
+This function computes the pool ID from the two token IDs `tokenID0` and `tokenID1` of the tokens in the pool as well as the fee tier `feeTier` of the pool.
+
+```python
+computePoolID(tokenID0: TokenID, tokenID1: TokenID, feeTier: uint32) -> PoolID:
+    return tokenID0 + tokenID1 + feeTier.to_bytes(4, byteorder = 'big')
+```
+
+
+#### createPool
+
+This internal function is used to create a new liquidity pool with the provided parameters.
+
+##### Parameters
+
+* `tokenID0`: The token ID of the first token in the pool.
+* `tokenID1`: The token ID of the second token in the pool.
+* `feeTier`: The fee tier of the pool.
+* `initialSqrtPrice`: The square root of the initial price of the pool.
+
+##### Returns
+
+* An integer indicating whether the pool was created successfully (value `POOL_CREATION_SUCCESS`) or the type of failure in the pool creation.
+
+##### Execution
+
+```python
+def createPool(tokenID0: TokenID, tokenID1: TokenID, feeTier: uint32, initialSqrtPrice: Q96) -> uint32:
+    # check validity of input parameters
+    if there is no entry s in settings.poolCreationSettings with s.feeTier == feeTier:
+        return POOL_CREATION_FAILED_INVALID_FEE_TIER
+    poolSetting = entry s in settings.poolCreationSettings with s.feeTier == feeTier
+
+    poolID = computePoolID(tokenID0, tokenID1, feeTier)
+    # check if pool already exists
+    if poolID in Pools Substore:
+        return POOL_CREATION_FAILED_ALREADY_EXISTS
+
+    poolStoreValue = {
+        "liquidity": 0,
+        "sqrtPrice": initialSqrtPrice,
+        "feeGrowthGlobal0": Q96(0),
+        "feeGrowthGlobal1": Q96(0),
+        "protocolFees0": Q96(0),
+        "protocolFees1": Q96(0),
+        "tickSpacing": poolSetting.tickSpacing
+    }
+    pools(poolID) = encode(poolsSchema, poolStoreValue)
+    return POOL_CREATION_SUCCESS
+```
+
+
+#### createPosition
+
+This function creates a new position in an existing pool.
+
+##### Parameters
+
+* `senderAddress`: The address of the pool creator as byte array of length `NUM_BYTES_ADDRESS`.
+* `poolID`: The pool ID value of an existing pool to which the position is added. The pool ID is a byte array of length `NUM_BYTES_POOL_ID`.
+* `tickLower`: The lower tick of the new position as integer in the `sint32` range.
+* `tickUpper`: The upper tick of the new position as integer in the `sint32` range.
+
+##### Returns
+
+The function returns a tuple `(result, positionID)` where:
+
+* `result`: An integer indicating the successful position creation (`result == POSITION_CREATION_SUCCESS`) or the reason why the position creation failed (`result != POSITION_CREATION_SUCCESS`).
+* `positionID`: If `result == POSITION_CREATION_SUCCESS`, then this is the position ID of the newly created position.
+
+##### Execution
+
+```python
+def createPosition(senderAddress: Address, poolID: PoolID, tickLower: uint32, tickUpper: uint32) -> Tuple[uint32, PositionID]:
+    # check that the corresponding pool is initialized
+    if not poolID in Pools Substore:
+        return (POSITION_CREATION_FAILED_NO_POOL, b'')
+    currentPool = pools(poolID)
+
+    # Check that tickLower < tickUpper and ticks are within global bounds.
+    # Currently this is redundant as it is already guaranteed by commands defined in this LIP,
+    # but could be useful if this function becomes accessible via an API in the future.
+    if MIN_TICK > tickLower
+       or tickLower>= tickUpper
+       or tickUpper > MAX_TICK:
+       return (POSITION_CREATION_FAILED_INVALID_TICKS, b'')
+    # check that only ticks according to the pools tick spacing are initialized
+    if tickLower % currentPool.tickSpacing != 0 or tickUpper % currentPool.tickSpacing != 0:
+        return (POSITION_CREATION_FAILED_INVALID_TICK_SPACING, b'')
+
+    # check if the lower price tick entry exist and update/create it
+    if tick(poolID, tickLower) does not exist:
+        tickStoreValue = {
+           "liquidityNet": 0,
+           "liquidityGross": 0,
+           "feeGrowthOutside0": Q96(0),
+           "feeGrowthOutside1": Q96(0)
+        }
+        if currentPool.sqrtPrice >= tickToPrice(tickLower):
+            tickStoreValue.feeGrowthOutside0 = currentPool.feeGrowthGlobal0
+            tickStoreValue.feeGrowthOutside1 = currentPool.feeGrowthGlobal1
+
+        tick(poolID, tickLower) = encode(priceTickSchema, tickStoreValue)
+
+    # check if the upper price tick entry exist and update/create it
+    if tick(poolID, tickUpper) does not exist:
+        tickStoreValue = {
+            "liquidityNet": 0,
+            "liquidityGross": 0,
+            "feeGrowthOutside0": Q96(0),
+            "feeGrowthOutside1": Q96(0)
+        }
+        if currentPool.sqrtPrice >= tickToPrice(tickUpper):
+            tickStoreValue.feeGrowthOutside0 = currentPool.feeGrowthGlobal0
+            tickStoreValue.feeGrowthOutside1 = currentPool.feeGrowthGlobal1
+
+        tick(poolID, tickUpper) = encode(priceTickSchema, tickStoreValue)
+
+    positionID = getNewPositionID(poolID, senderAddress)  
+
+    positionValue = {
+        "tickLower": tickLower,
+        "tickUpper": tickUpper,
+        "liquidity": 0,
+        "feeGrowthInsideLast0": Q96(0),
+        "feeGrowthInsideLast1": Q96(0),
+        "ownerAddress": senderAddress
+    }
+    positions(positionID) = encode(positionSchema, positionValue)
+    return (POSITION_CREATION_SUCCESS, positionID)
+```
+
+
+#### getFeeGrowthInside
+
+This function allows to compute the fee growth inside a position and corresponds to [the following function in Uniswap](https://github.com/Uniswap/v3-core/blob/main/contracts/libraries/Tick.sol#L60).
+
+##### Parameters
+
+- `positionID`: The ID of the position for which to compute the fee growth.
+
+##### Returns
+
+- `feeGrowthInside0`: The fee growth in terms of token0, per unit of liquidity, between the tick boundaries of the position.
+- `feeGrowthInside1`: The fee growth in terms of token1, per unit of liquidity, between the tick boundaries of the position.
+
+##### Execution
+
+```python
+def getFeeGrowthInside(positionID: PositionID) -> Tuple[Q96, Q96]:
+    positionInfo = positions(positionID)
+    poolID = getPoolIDFromPositionID(positionID)
+    poolInfo = pools(poolID)
+
+    tickLower = positionInfo.tickLower
+    tickUpper = positionInfo.tickUpper
+    tickCurrent = priceToTick(poolInfo.sqrtPrice)
+    lowerTickInfo = tick(poolID, tickLower)
+    upperTickInfo = tick(poolID, tickUpper)
+
+    # compute the fee growth below
+    if tickCurrent >= tickLower:
+        feeGrowthBelow0 = lowerTickInfo.feeGrowthOutside0
+        feeGrowthBelow1 = lowerTickInfo.feeGrowthOutside1
+    else:
+        feeGrowthBelow0 = sub_96(poolInfo.feeGrowthGlobal0, lowerTickInfo.feeGrowthOutside0)
+        feeGrowthBelow1 = sub_96(poolInfo.feeGrowthGlobal1, lowerTickInfo.feeGrowthOutside1)
+
+    # compute the fee growth above
+    if tickCurrent < tickUpper:
+        feeGrowthAbove0 = upperTickInfo.feeGrowthOutside0
+        feeGrowthAbove1 = upperTickInfo.feeGrowthOutside1
+    else:
+        feeGrowthAbove0 = sub_96(poolInfo.feeGrowthGlobal0, upperTickInfo.feeGrowthOutside0)
+        feeGrowthAbove1 = sub_96(poolInfo.feeGrowthGlobal1, upperTickInfo.feeGrowthOutside1)
+
+    feeGrowthInside0 = sub_96(sub_96(poolInfo.feeGrowthGlobal0, feeGrowthBelow0), feeGrowthAbove0)
+    feeGrowthInside1 = sub_96(sub_96(poolInfo.feeGrowthGlobal1, feeGrowthBelow1), feeGrowthAbove1)
+    return (feeGrowthInside0, feeGrowthInside1)
+```
+
+
+#### getLiquidityForAmounts
+
+This function computes the maximum liquidity that can be added by a position which is sending a certain amount of tokens. This function is similar to the function [getLiquidityForAmounts](https://github.com/Uniswap/v3-periphery/blob/51f8871aaef2263c8e8bbf4f3410880b6162cdea/contracts/libraries/LiquidityAmounts.sol#L56) in Uniswap v3 and the function [maxLiquidityForAmounts](https://github.com/Uniswap/v3-sdk/blob/218eec99a1e6470e1a42fba4eab92b3ff9d02964/src/utils/maxLiquidityForAmounts.ts#L68) in the Uniswap v3 SDK.
+
+##### Parameters
+
+- `currentSqrtPrice`: The sqrt price of the pool as Q96 number.
+- `lowerTickSqrtPrice`: The sqrt price of the lower tick of the position as `Q96` number.
+- `upperTickSqrtPrice`: The sqrt price of the upper tick of the position as `Q96` number.
+- `amount0`: The amount of `token0` sent as `uint64`.
+- `amount1`: The amount of `token1` sent as `uint64`.
+
+##### Returns
+
+The function returns the maximum liquidity as `uint64` that can be added by a position with the given parameters.
+
+##### Execution
+
+```python
+def getLiquidityForAmounts(currentSqrtPrice: Q96,
+                           lowerTickSqrtPrice: Q96,
+                           upperTickSqrtPrice: Q96,
+                           amount0: uint64,
+                           amount1: uint64) -> uint64:
+    if lowerTickSqrtPrice > upperTickSqrtPrice:
+        raise Exception()
+
+    if currentSqrtPrice <= lowerTickSqrtPrice:
+        liquidity = getLiquidityForAmount0(lowerTickSqrtPrice, upperTickSqrtPrice, amount0)
+    elif currentSqrtPrice < upperTickSqrtPrice:
+        liquidity0 = getLiquidityForAmount0(currentSqrtPrice, upperTickSqrtPrice, amount0)
+        liquidity1 = getLiquidityForAmount1(lowerTickSqrtPrice, currentSqrtPrice, amount1)
+
+        if liquidity0 < liquidity1:
+            liquidity = liquidity0
+        else:
+            liquidity = liquidity1
+    else:
+        liquidity = getLiquidityForAmount1(lowerTickSqrtPrice, upperTickSqrtPrice, amount1)
+
+    if liquidity < 0 or liquidity >= 2**64:
+        raise Exception()
+    return liquidity
+
+# see Equation (4) in http://atiselsts.github.io/pdfs/uniswap-v3-liquidity-math.pdf
+def getLiquidityForAmount0(lowerSqrtPrice: Q96, upperSqrtPrice: Q96, amount0: uint64) -> uint64:
+    intermediate = muldiv_96(lowerSqrtPrice, upperSqrtPrice, Q96(1))
+    result = muldiv_96(Q96(amount0), intermediate, sub_96(upperSqrtPrice, lowerSqrtPrice))
+    return roundDown_96(result)
+
+# see Equation (9) in http://atiselsts.github.io/pdfs/uniswap-v3-liquidity-math.pdf
+def getLiquidityForAmount1(lowerSqrtPrice, upperSqrtPrice, amount1):
+    result = muldiv_96(Q96(amount1), Q96(1), sub_96(upperSqrtPrice, lowerSqrtPrice))
+    return roundDown_96(result)
+```
+
+
+#### getNewPositionID
+
+This function allows to get the position ID of a newly created position.
+
+```python
+getNewPositionID(poolID: PoolID, ownerAddress: Address) -> PositionID:
+    positionIndex = dexGlobalState.positionCounter
+    dexGlobalState.positionCounter = dexGlobalState.positionCounter +1
+
+    #nftID = NFT.create(senderAddress, NFT_COLLECTION_DEX, empty byte array)
+    #positionID = poolID || uint64be(nftID.index)
+    #NFT.setAttributes(positionID, nftID)
+
+    return poolID + positionIndex.to_bytes(8, byteorder = 'big')
+```
+
+
+#### getOwnerAddressOfPosition
+
+This function allows to get the address of the owner of the position provided as input.
+
+```python
+getOwnerAddressOfPosition(positionID: PositionID) -> Address:
+    return position(positionID).ownerAddress
+```
+
+
+#### getPoolIDFromPositionID
+
+This helper function computes the pool ID from a given position ID.
+
+```python
+getPoolIDFromPositionID(positionID: PositionID) -> PoolID:
+    return positionID[:NUM_BYTES_POOL_ID]
+```
+
+
+#### updatePosition
+
+This function updates or deletes an existing entry in the positions substore.
+It also updates the corresponding price ticks and deletes them if necessary.
+It also updates the `pools.liquidity` property of the pool if `pools.sqrtPrice` is within the range of the updated position.
+It always transfers the collected fees to the position owner.
+Additionally, if the function is subtracting liquidity, the respective token amounts are transferred to the position owner.
+The function is similar to the function [_modifyPosition](https://github.com/Uniswap/v3-core/blob/ed88be38ab2032d82bf10ac6f8d03aa631889d48/contracts/UniswapV3Pool.sol#L306) in Uniswap v3.
+
+##### Parameters
+
+* `positionID`: The ID of the position that is supposed to be updated.
+* `liquidityDelta`: The change of liquidity, i.e., a positive integer if liquidity is added and a negative integer if liquidity is supposed to be removed.
+
+##### Returns
+
+The function returns `(amount0, amount1)`, where `amount0` for `liquidityDelta >= 0` is the amount of `token0` added to the position and for `liquidityDelta < 0` the amount of `token0` removed from the position.
+Analogously, `amount1` is the amount of `token1` added or removed from the position.
+
+##### Execution
+
+```python
+def updatePosition(positionID: PositionID, liquidityDelta: int64) -> Tuple[uint64, uint64]:
+    # check validity of input parameters
+    positionInfo = positions(positionID)
+    if -liquidityDelta > positionInfo.liquidity:
+        # this can only occur if the removed liquidity is larger than the liquidity of the position
+        ownerAddress = getOwnerAddressOfPosition(positionID)
+
+        emitPersistentEvent(
+            moduleID = MODULE_ID_DEX,
+            typeID = TYPE_ID_POSITION_UDPATE_FAILED,
+            data = {
+                "senderAddress": senderAddress,
+                "positionID": positionID,
+                "result": POSITION_UPDATE_FAILED_INSUFFICIENT_LIQUIDITY
+            },
+            topics = [senderAddress, positionID]
+        )
+        raise Exception()
+
+    # collect the fees and update the position accordingly
+    collectFeesAndIncentives(positionID)
+
+    # check that we are actually updating the position not only collecting fees
+    if liquidityDelta == 0:
+        amount0 = 0
+        amount1 = 0
+        return (amount0, amount1)
+
+    # calculate output amounts
+    poolID = getPoolIDFromPositionID(positionID)
+    poolInfo = pools(poolID)
+    lowerTickInfo = tick(poolID, positionInfo.tickLower)
+    upperTickInfo = tick(poolID, positionInfo.tickUpper)
+    sqrtPriceLow = tickToPrice(positionInfo.tickLower)
+    sqrtPriceUp = tickToPrice(positionInfo.tickUpper)
+
+    # if liquidity is added, we need to round up so that we ensure that at least the required amount of token is added
+    # if liquidity is removed, we need to round down so that we ensure that at most the required amount of token is removed
+    roundUp = liquidityDelta > 0
+
+    if poolInfo.sqrtPrice <= sqrtPriceLow:
+        amount0 = getAmount0Delta(sqrtPriceLow, sqrtPriceUp, abs(liquidityDelta), roundUp)
+        amount1 = 0
+    elif sqrtPriceLow < poolInfo.sqrtPrice and  poolInfo.sqrtPrice < sqrtPriceUp:
+        amount0 = getAmount0Delta(poolInfo.sqrtPrice, sqrtPriceUp, abs(liquidityDelta), roundUp)
+        amount1 = getAmount1Delta(sqrtPriceLow, poolInfo.sqrtPrice, abs(liquidityDelta), roundUp)
+    else: # sqrtPriceUp < poolInfo.sqrtPrice
+        amount0 = 0
+        amount1 = getAmount1Delta(sqrtPriceLow, sqrtPriceUp, abs(liquidityDelta), roundUp)
+
+    # transfer the respective amounts to the pool or from the pool
+    ownerAddress = getOwnerAddressOfPosition(positionID)
+    if liquidityDelta > 0:
+        transferToPool(ownerAddress, poolID, getToken0Id(poolID), amount0)
+        transferToPool(ownerAddress, poolID, getToken1Id(poolID), amount1)
+    else:
+        transferFromPool(poolID, ownerAddress, getToken0Id(poolID), amount0)
+        transferFromPool(poolID, ownerAddress, getToken1Id(poolID), amount1)
+
+    # update the pool entry if sqrtPrice is in the price range
+    if sqrtPriceLow <= poolInfo.sqrtPrice and poolInfo.sqrtPrice < sqrtPriceUp:
+        poolInfo.liquidity += liquidityDelta
+        pools(poolID) = poolInfo
+
+    # update position liquidity
+    positionInfo.liquidity += liquidityDelta
+    if positionInfo.liquidity == 0:
+        delete entry positions(positionID)
+    else:
+        positions(positionID) = positionInfo
+
+    # update price ticks
+    lowerTickInfo.liquidityNet += liquidityDelta
+    upperTickInfo.liquidityNet -= liquidityDelta
+    lowerTickInfo.liquidityGross += liquidityDelta
+    upperTickInfo.liquidityGross += liquidityDelta
+
+    if lowerTickInfo.liquidityGross == 0:
+        delete entry tick(poolID,  positionInfo.tickLower)
+    else:
+        tick(poolID, positionInfo.tickLower) = lowerTickInfo
+
+    if upperTickInfo.liquidityGross == 0:
+        delete entry tick(poolID,  positionInfo.tickUpper)
+    else:
+        tick(poolID, positionInfo.tickUpper) = upperTickInfo
+
+    return (amount0, amount1)
+```
+
+### Protocol Logic for Other Modules
+
+TBD
+
+### Endpoints for Off-Chain Services
+
+#### getCollectableFees
+
+This endpoints allows to obtain the amount of fees that can be collected for a given position.
+
+##### Parameters
+
+- `positionID`: The ID of the position for which to get the collectable fees.
+
+##### Returns
+
+A tuple `(collectableFees0, collectableFees1, collectableIncentives)` where
+
+* `collectableFees0`: The amount of fees in `token0` that can be collected by the position owner.
+* `collectableFees1`: The amount of fees in `token1` that can be collected by the position owner.
+* `collectableIncentives`: The amount of liqudity provider incentives in the token with ID `TOKEN_ID_REWARDS` that can be collected by the position owner.
+
+##### Execution
+
+```python
+getCollectableFeesAndIncentives(positionID: PositionID) -> Tuple[uint64, uint64, uint64]:
+    # check validity of input parameters
+    if positionID not in Positions substore:
+       raise Exception()
+
+    (collectableFees0, collectableFees1, feeGrowthInside0, feeGrowthInside1) = computeCollectableFees(positionID)
+    (collectableFeesLSK, collectableIncentives) = computeCollectableIncentives(positionID, collectableFees0, collectableFees1)
+    return (collectableFees0, collectableFees1, collectableIncentives)
+```
+
+## Backwards Compatibility
+
+This LIP, together with the ["Introduce DEX Module" LIP][lip-define-dex-module] and ["Define swap interaction for DEX module" LIP][lip-defne-swap-interactions], introduce a new module with its dedicated module store and commands. Adding this module to an existing blockchain therefore requires a hardfork.
+
+## Reference Implementation
+
+TBD
+
+## Appendix
+
+### User Flow for Commands
+
+This section contains recommendation of how the parameters for the different commands defined in this LIP can be prepared. In particular, we describe which command parameters should be requested from the user and how the other parameters can be computed.
+
+TODO  
+
+[lip-0027]: https://github.com/LiskHQ/lips/blob/main/proposals/lip-0027.md
+[lip-0051]: https://github.com/LiskHQ/lips/blob/main/proposals/lip-0051.md
+[lip-0052]: https://github.com/LiskHQ/lips/blob/main/proposals/lip-0052.md
+[lip-define-dex-module]: https://github.com/LiskHQ/lips-staging/blob/lip-Introduce_DEX_Module/proposals/lip-introduce_DEX_Module.md
+[lip-define-dex-module-constants]: https://github.com/LiskHQ/lips-staging/blob/lip-Introduce_DEX_Module/proposals/lip-introduce_DEX_Module.md#notation-and-constants
+[lip-defne-swap-interactions]: https://github.com/LiskHQ/lips-staging/blob/lip-swap_interaction_DEX/proposals/lip-swap_Interaction.md
