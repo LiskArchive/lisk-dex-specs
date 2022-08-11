@@ -1,0 +1,1142 @@
+```
+LIP: <LIP number>
+Title: Define swap interaction for DEX module
+Author: Iker Alustiza <iker@lightcurve.io>
+        Sergey Shemyakov <sergey.shemyakov@lightcurve.io>
+Type: Standards Track
+Created: <YYYY-MM-DD>
+Updated: <YYYY-MM-DD>
+Required: LIP "Introduce DEX module", LIP 40, LIP 51
+```
+
+## Abstract
+
+In this LIP, we introduce the swap interaction for the DEX module and specify the commands and internal functions that define it.
+Together with LIP "Introduce DEX module" and LIP "LPs", this LIP completely specifies the DEX module.
+The DEX module defines a decentralized exchange based on an automated market maker with a concentrated liquidity algorithm.
+
+## Copyright
+
+This LIP is licensed under the [Creative Commons Zero 1.0 Universal](https://creativecommons.org/publicdomain/zero/1.0/).
+
+## Motivation
+
+For motivation, refer to the Motivation Section of the ["Introduce DEX Module" LIP][dexmodulelip].
+
+## Rationale
+
+### Types of Swap Commands
+
+The on-chain logic of DEX module supports three different types of swaps: swap with exact input, swap with exact output and swap with price limit.
+
+The state of a pool changes every time when liquidity is added or removed, or when tokens are swapped in the pool. The exact amount of tokens that a trader obtains in exchange for a given amount of tokens depends on the state of DEX, so it is impossible to know precisely at the moment of signing a swap transaction. Swapping with exact input or output addresses this problem: trader can specify the precise amount of tokens that they want to swap, or that they want to get after a swap, but not both.
+
+Swap with price limit supports the task of arbitrage: a trader can swap tokens in a pool until the price in the pool is equal to the market price.
+
+### Slippage Protection
+
+For a given swap, slippage denotes how much the internal price is changed after the swap (measured in the percents of the initial price). Slippage estimates the difference between the price before the swap and the actual price of the swap (as the ratio of amounts of input and output tokens). Thus big slippage corresponds to more expensive trades for a trader.
+
+All swap commands offer protection against too high slippage. When requesting a swap with exact input/ output or with price limit, a trader can specify the minimal amount of tokens to obtain/ maximal amount of tokens to pay. Moreover, a swap with price limit can be used for slippage protection: here a trader can directly specify the price limit not to be crossed during the swap.
+
+### Fees and incentives
+
+Trader pays certain part of the swap amount as fees, depending on the fee tier of the pool. Fees are paid in both input and output tokens, for multihop swaps the fees are also paid in all intermediate tokens. Fees are split between protocol and liquidity providers, additionally all LSK fees are shared with the exchange sidechain validators. The fee parts for different actors are given in the settings substore of the DEX module. The traders are incentivised to swap LSK tokens: for every fee paid in LSK the trader received certain amount of `TOKEN_ID_REWARDS` tokens.
+
+The fees and incentives define the economics of the exchange. They motivate liquidity providers to invest into pools and stimulate traders and validators.
+
+## Specification
+
+In this LIP, we specify three swap commands and the corresponding internal functions of the DEX module. The DEX module has module name `MODULE_NAME_DEX`.
+
+### Constants and Types
+
+This LIP uses constants and types defined in the ["Introduce DEX Module" LIP][dexmodulelip]. The table below defines types specific for this LIP:
+
+|Name            | Type              | Validation                           | Description                           |
+|----------------|-------------------|--------------------------------------|---------------------------------------|
+| TickID         | `bytes`           | must have length `NUM_BYTES_TICK_ID` | Identifies tick objects in Lisk DEX   |
+| PoolsGraph     | `tuple[Set[TokenID], Set[PoolID]]` | None                | Represents a pools graph from the DEX router as a set of vertices and a set of edges |
+
+ The table below specifies event-relevant constants:
+
+| Name                              | Type     | Value | Description                                                                                                               |
+| --------------------------------- | -------- | ----- | ------------------------------------------------------------------------------------------------------------------------- |
+| `SWAP_FAILED_INVALID_ROUTE`       | `uint32` | 0     | Return code for the failed swap event in case of invalid swap route                                                       |
+| `SWAP_FAILED_TOO_MANY_TICKS`      | `uint32` | 1     | Return code for the failed swap event in case of crossing too many ticks                                                  |
+| `SWAP_FAILED_NOT_ENOUGH`          | `uint32` | 2     | Return code for the failed swap event in case of insufficient amount of output tokens or excessive amount of input tokens |
+| `SWAP_FAILED_INVALID_LIMIT_PRICE` | `uint32` | 3     | Return code for the failed swap event in case of invalid limit price value for the swap with price limit command          |
+| `FEE_TIER_PARTITION`              | `uint32` |1000000| The inverse of the fee tier precision                                                                                     |
+
+#### Logic from Other Modules
+
+Calling a function `fct` implemented in another module `module` is represented by `module.fct(required inputs)`.
+
+### Events
+
+#### Swapped
+
+This event is emitted when a swap is performed successfully. The name of the event is `EVENT_NAME_SWAPPED`.
+
+##### Topics
+
+- `senderAddress`: the address requesting a swap.
+
+##### Data
+
+```java
+swappedEventDataSchema = {
+    "type": "object",
+    "required": [
+        "senderAddress",
+        "tokenIdIn",
+        "amountIn",
+        "tokenIdOut"
+        "amountOut",
+    ],
+    "properties": {
+        "senderAddress": {
+            "dataType": "bytes",
+            "fieldNumber": 1
+        },
+        "tokenIdIn": {
+            "dataType": "bytes",
+            "fieldNumber": 3
+        },
+        "amountIn": {
+            "dataType": "uint64",
+            "fieldNumber": 2
+        },
+        "tokenIdOut": {
+            "dataType": "bytes",
+            "fieldNumber": 5
+        },
+        "amountOut": {
+            "dataType": "uint64",
+            "fieldNumber": 4
+        }
+    }
+}
+```
+
+#### SwapFailed
+
+This event is emitted when a swap fails. The name of the event is `EVENT_NAME_SWAP_FAILED`.
+
+##### Topics
+
+- `senderAddress`: the address requesting a swap.
+
+##### Data
+
+```java
+swapFailedEventDataSchema = {
+    "type": "object",
+    "required": [
+        "senderAddress",
+        "tokenIdIn",
+        "tokenIdOut",
+        "reason"
+    ],
+    "properties": {
+        "senderAddress": {
+            "dataType": "bytes",
+            "fieldNumber": 1
+        },
+        "tokenIdIn": {
+            "dataType": "bytes",
+            "fieldNumber": 2
+        },
+        "tokenIdOut": {
+            "dataType": "bytes",
+            "fieldNumber": 3
+        },
+        "reason": {
+            "dataType": "uint32",
+            "fieldNumber": 4
+        }
+    }
+}
+```
+
+Here the `"reason"` property specifies the reason why the swap failed and can have values from the set `{SWAP_FAILED_INVALID_ROUTE, SWAP_FAILED_TOO_MANY_TICKS, SWAP_FAILED_NOT_ENOUGH}`.
+
+### Commands
+
+#### swap exact input command
+
+The swap exact input command swaps the specifies input amount of a token, from the account of the user sending the command, for an output amount of another token to a receiving account. The command parameters also specify the route of the swap from initial pool ID to final pool ID, a minimum output amount and a deadline for the swap.
+
+##### Parameters
+
+```java
+swapExactInCommandSchema = {
+    "type": "object",
+    "required": [
+        "tokenIdIn",
+        "amountTokenIn",
+        "tokenIdOut",
+        "minAmountTokenOut",
+        "swapRoute",
+        "maxTimestampValid"
+        ],
+    "properties": {
+        "tokenIdIn": {
+            "dataType": "bytes",
+            "length": NUM_BYTES_TOKEN_ID,
+            "fieldNumber": 1
+        },
+        "amountTokenIn": {
+            "dataType": "uint64",
+            "fieldNumber": 2
+        },
+        "tokenIdOut": {
+            "dataType": "bytes",
+            "length": NUM_BYTES_TOKEN_ID,
+            "fieldNumber": 3
+        },
+        "minAmountTokenOut": {
+            "dataType": "uint64",
+            "fieldNumber": 4
+        },
+        "swapRoute": {
+            "type": "array",
+            "fieldNumber": 5,
+            "items": {
+                "dataType": "bytes"
+                "length": NUM_BYTES_POOL_ID
+            }
+        },
+        "maxTimestampValid": {
+            "dataType": "uint32",
+            "fieldNumber": 6
+        }
+    }
+}
+
+```
+
+- `tokenIdIn`: The token ID of the swap input token.
+- `amountTokenIn`: The amount of the swap input token to be swapped from the account of the sender.
+- `tokenIdOut`: The token ID of the swap output token.
+- `minAmountTokenOut`: The minimal amount of the tokens to be received by the sender for the swap to be valid.
+- `swapRoute`: An array of pool IDs specifying the route for the swap, it can have a maximum length of `MAX_HOPS_SWAP` and it cannot be empty.
+- `maxTimestampValid`: A `uint32` integer with the maximal timestamp of a block where a transaction with this command can be included.
+
+##### Verification
+
+```python
+def verify(trs: Transaction) -> None:
+    if trs.params does not satisfy swapExactInCommandSchema:
+        raise Exception()
+    if trs.params.tokenIdIn == trs.params.tokenIdOut:
+        raise Exception()
+    if trs.params.swapRoute is empty or length(trs.params.swapRoute) > MAX_HOPS_SWAP:
+        raise Exception()
+    firstPool = trs.params.swapRoute[0]
+    lastPool = trs.params.swapRoute[-1]
+    if getToken0Id(firstPool) != trs.params.tokenIdIn and getToken1Id(firstPool) != trs.params.tokenIdIn:
+        raise Exception()
+    if getToken0Id(lastPool) != trs.params.tokenIdOut and getToken1Id(firstPool) != trs.params.tokenIdOut:
+        raise Exception()
+    if trs.params.maxTimestampValid < lastBlockheader.timestamp:
+        raise Exception()
+```
+
+##### Execution
+
+Processing a transaction trs with module name `MODULE_NAME_DEX` and command name `COMMAND_SWAP_EXACT_INPUT` implies the following logic:
+
+```python
+def execute(trs: Transaction) -> None:
+    senderAddress = SHA256(trs.senderPublicKey)[:NUM_BYTES_ADDRESS]
+    tokenIdIn = trs.params.tokenIdIn
+    tokenIdOut = trs.params.tokenIdOut
+    tokens = [{id: tokenIdIn, amount: trs.params.amountTokenIn}]
+    swapRoute = trs.params.swapRoute
+    fees = []
+    # swap along all the pools in swapRoute
+    for every element poolId in swapRoute:
+        if poolId not in pools:
+            raiseSwapException(SWAP_FAILED_INVALID_ROUTE, tokenIdIn,
+                                tokenIdOut, senderAddress)
+
+        currentTokenIn = tokens[-1]
+        if getToken0Id(poolId) == currentTokenIn.id:
+            zeroToOne = True
+            IdOut = getToken1Id(poolId)
+        else if getToken1Id(poolId) == currentTokenIn.id:
+            zeroToOne = False
+            IdOut = getToken0Id(poolId)
+        else:
+            # neither of tokens of pool n is an output token of pool n-1
+            raiseSwapException(SWAP_FAILED_INVALID_ROUTE, tokenIdIn,
+                                tokenIdOut, senderAddress)
+
+        # if zeroToOne then price decreases after the swap, otherwise it increases
+        sqrtLimitPrice = zeroToOne ? MIN_SQRT_RATIO : MAX_SQRT_RATIO
+        try:
+            (amountIn, amountOut, feesIn, feesOut) = swap(poolId, zeroToOne, sqrtLimitPrice, currentTokenIn.amount, False)
+        except ExceptionSwapCrossedTooManyTicks:    # specific exception class for crossing too many ticks
+            # crossed too many ticks
+            raiseSwapException(SWAP_FAILED_TOO_MANY_TICKS, tokenIdIn,
+                                tokenIdOut, senderAddress)
+
+        tokens.append({id:IdOut, amount: amountOut})
+        fees.append({in: feesIn, out: feesOut})
+
+    # check that amount out is at least the minimum required amount
+    if  tokens[-1].amount <  trs.params.minAmountTokenOut:
+        raiseSwapException(SWAP_FAILED_NOT_ENOUGH, tokenIdIn,
+                            tokenIdOut, senderAddress)
+
+    else:
+        # make the corresponding state updates
+        # transfer and lock all the tokens involved in the multihop swap  
+        transferToPool(senderAddress, swapRoute[0], tokenIdIn, trs.params.amountTokenIn)
+        transferFeesFromPool(fees[0].in, tokenIdIn, swapRoute[0])
+        for i in range(1, length(swapRoute)):
+            # pay output fees, transfer to the next pool, pay input fees in the next pool
+            transferFeesFromPool(fees[i-1].out, tokens[i].id, swapRoute[i-1])
+            transferPoolToPool(swapRoute[i-1], swapRoute[i], tokens[i].id, tokens[i].amount)
+            transferFeesFromPool(fees[i].in, tokens[i].id, swapRoute[i])
+        transferFeesFromPool(fees[-1].out, tokenIdOut, swapRoute[-1])
+        transferFromPool(swapRoute[-1], senderAddress, tokenIdOut, tokens[-1].amount)
+
+        transferTraderIncentives(fees, tokens, senderAddress)
+        emitEvent(
+            module = MODULE_NAME_DEX,
+            name = EVENT_NAME_SWAPPED,
+            data = {
+                "senderAddress": senderAddress,
+                "tokenIdIn": tokenIdIn,
+                "amountIn": trs.params.amountTokenIn,
+                "tokenIdOut": tokenIdOut,
+                "amountOut": tokens[-1].amount
+            },
+            topics = [senderAddress]
+        )  
+```
+
+where the functions `getToken0Id`, `getToken1Id`, `transferToPool`, `transferPoolToPool`, and `transferFromPool` are defined in the [Introduce DEX module LIP][dexmodulelip].
+
+#### swap exact output command
+
+The swap exact output command swaps an input amount of a token, from the account of the user sending the command, for the specified output amount of another token to a receiving account. The command also specifies the route of the swap from initial pool ID to final pool ID, a maximum input amount and a deadline for the swap.
+
+##### Parameters
+
+```java
+swapExactOutCommandSchema = {
+    "type": "object",
+    "required": [
+        "tokenIdIn",
+        "maxAmountTokenIn",
+        "tokenIdOut",
+        "amountTokenOut",
+        "swapRoute",
+        "maxTimestampValid"
+    ],
+    "properties": {
+        "tokenIdIn": {
+            "dataType": "bytes",
+            "length": NUM_BYTES_TOKEN_ID,
+            "fieldNumber": 1
+        },
+        "maxAmountTokenIn": {
+            "dataType": "uint64",
+            "fieldNumber": 2
+        },
+        "tokenIdOut": {
+            "dataType": "bytes",
+            "length": NUM_BYTES_TOKEN_ID,
+            "fieldNumber": 3
+        },
+        "amountTokenOut": {
+            "dataType": "uint64",
+            "fieldNumber": 4
+        }
+        "swapRoute": {
+            "type": "array",
+            "fieldNumber": 5,
+            "items": {
+                "dataType": "bytes",
+                "length": NUM_BYTES_POOL_ID
+            }
+        },
+        "maxTimestampValid": {
+            "dataType": "uint32",
+            "fieldNumber": 6
+        }
+    }
+}
+
+```
+
+- `tokenIdIn`: The token ID of the swap input token.
+- `maxAmountTokenIn`: The maximal amount of the swap input token to be swapped from the account of the sender for the swap to be valid.
+- `tokenIdOut`: The token ID of the swap output token.
+- `amountTokenOut`: The amount of the output tokens to be received by the sender.
+- `swapRoute`: An array of pool IDs specifying the route for the swap, it can have a maximum length of `MAX_HOPS_SWAP` and it cannot be empty.
+- `maxTimestampValid`: A `uint32` integer with the maximal timestamp of a block where a transaction with this command can be included.
+
+##### Verification
+
+```python
+def verify(trs: Transaction) -> None:
+    if trs.params does not satisfy swapExactInCommandSchema:
+        raise Exception()
+    if trs.params.tokenIdIn == trs.params.tokenIdOut:
+        raise Exception()
+    if trs.params.swapRoute is empty or length(trs.params.swapRoute) > MAX_HOPS_SWAP:
+        raise Exception()
+    firstPool = trs.params.swapRoute[0]
+    lastPool = trs.params.swapRoute[-1]
+    if getToken0Id(firstPool) != trs.params.tokenIdIn and getToken1Id(firstPool) != trs.params.tokenIdIn:
+        raise Exception()
+    if getToken0Id(lastPool) != trs.params.tokenIdOut and getToken1Id(firstPool) != trs.params.tokenIdOut:
+        raise Exception()
+    if trs.params.maxTimestampValid < lastBlockheader.timestamp:
+        raise Exception()
+```
+
+##### Execution
+
+Processing a transaction trs with module name `MODULE_NAME_DEX` and command name `COMMAND_SWAP_EXACT_OUTPUT` implies the following logic:
+
+```python
+def execute(trs: Transaction) -> None:
+    inverseSwapRoute = reverse trs.params.swapRoute
+    tokenIdIn = trs.params.tokenIdIn
+    tokenIdOut = trs.params.tokenIdOut
+    senderAddress = SHA256(trs.senderPublicKey)[:NUM_BYTES_ADDRESS]
+
+    # swap along all the pools in inverseSwapRoute
+    tokens = {id: tokenIdOut, amount: trs.params.amountTokenOut}
+    for every element poolId in inverseSwapRoute:
+        if poolId not in pools:
+            raiseSwapException(SWAP_FAILED_INVALID_ROUTE, tokenIdIn,
+                                tokenIdOut, senderAddress)
+        currentTokenOut = tokens[-1]
+
+        if getToken1Id(poolId) == currentTokenOut.id:
+            zeroToOne = True
+            IdIn = getToken0Id(poolId)
+        else if getToken0Id(poolId) == currentTokenOut.id:
+            zeroToOne = False
+            IdIn = getToken1Id(poolId)
+        else:
+            # neither of tokens of pool n-1 is an input token of pool n
+            raiseSwapException(SWAP_FAILED_INVALID_ROUTE, tokenIdIn,
+                                tokenIdOut, senderAddress)
+
+        # if zeroToOne then price decreases after the swap, otherwise it increases
+        sqrtLimitPrice = zeroToOne ? MIN_SQRT_RATIO : MAX_SQRT_RATIO
+        try:
+            (amountIn, amountOut, feesIn, feesOut) = swap(poolId, zeroToOne, sqrtLimitPrice, currentTokenOut.amount, False)
+        except ExceptionSwapCrossedTooManyTicks:    # specific exception class for crossing too many ticks
+            # crossed too many ticks
+            raiseSwapException(SWAP_FAILED_TOO_MANY_TICKS, tokenIdIn,
+                                tokenIdOut, senderAddress)
+
+        tokens.append({id:IdIn, amount: amountIn})
+        fees.append({in: feesIn, out: feesOut})
+
+    # check that amount out is at least the minimum required amount
+    if  tokens[-1].amount >  trs.params.maxAmountTokenIn:
+        raiseSwapException(SWAP_FAILED_NOT_ENOUGH, tokenIdIn,
+                            tokenIdOut, senderAddress)
+    else:
+        # make the corresponding state updates
+        # transfer and lock all the tokens involved in the multihop swap
+        transferFromPool(inverseSwapRoute[0], senderAddress, tokenIdOut, tokens[0].amount)
+        transferFeesFromPool(fees[0].out, tokenIdOut, inverseSwapRoute[0])
+        for i in range(1, length(inverseSwapRoute)):
+            # pay input fees, transfer to the next pool, pay output fees in the next pool
+            transferFeesFromPool(fees[i-1].in, tokens[i].id, inverseSwapRoute[i-1])
+            transferPoolToPool(inverseSwapRoute[i-1], inverseSwapRoute[i], tokens[i].id, tokens[i].amount)
+            transferFeesFromPool(fees[i].out, tokens[i].id, inverseSwapRoute[i])
+        transferFeesFromPool(fees[-1].in, tokenIdIn, inverseSwapRoute[-1])
+        transferToPool(senderAddress, inverseSwapRoute[-1], tokenIdIn, tokens[-1].amount)
+
+        traderIncentives = transferTraderIncentives(fees, tokens, senderAddress)
+        emitEvent(
+            module = MODULE_NAME_DEX,
+            name = EVENT_NAME_SWAPPED,
+            data = {
+                "senderAddress": senderAddress,
+                "tokenIdIn": tokenIdIn,
+                "amountIn": tokens[-1].amount,
+                "tokenIdOut": tokenIdOut,
+                "amountOut": trs.params.amountTokenOut
+            },
+            topics = [senderAddress]
+        )
+
+```
+
+where the functions `getToken0Id`, `getToken1Id`, `transferToPool`, `transferPoolToPool`, and `transferFromPool` are defined in the [Introduce DEX module LIP][dexmodulelip].
+
+#### swap with price limit command
+
+The swap with price limit command performs a swap in a single pool with price change at most up to the specified target price.
+The command transfers at most the specified input amount from the account of the user sending the command to the pool and transfers at least the specified output amount to the specified output account.
+The command also specifies a deadline for the swap.
+
+##### Parameters
+
+```java
+swapWithPriceLimitCommandSchema = {
+    "type": "object",
+    "required": [
+        "tokenIdIn",
+        "maxAmountTokenIn",
+        "tokenIdOut",
+        "minAmountTokenOut",
+        "poolId",
+        "maxTimestampValid",
+        "sqrtLimitPrice"
+    ],
+    "properties": {
+        "tokenIdIn": {
+            "dataType": "bytes",
+            "length": NUM_BYTES_TOKEN_ID,
+            "fieldNumber": 1
+        },
+        "maxAmountTokenIn": {
+            "dataType": "uint64",
+            "fieldNumber": 2
+        },
+        "tokenIdOut": {
+            "dataType": "bytes",
+            "length": NUM_BYTES_TOKEN_ID,
+            "fieldNumber": 3
+        },
+        "minAmountTokenOut": {
+            "dataType": "uint64",
+            "fieldNumber": 4
+        },
+        "poolId": {
+            "dataType": "bytes",
+            "length": NUM_BYTES_POOL_ID,
+            "fieldNumber": 5
+        },
+        "maxTimestampValid": {
+            "dataType": "uint32",
+            "fieldNumber": 6
+        },
+        "sqrtLimitPrice": {
+            "dataType": "bytes",
+            "maxLength": MAX_NUM_BYTES_Q96,
+            "fieldNumber": 7
+        }
+    }
+}
+```
+
+- `tokenIdIn`: The token ID of the swap input token.
+- `maxAmountTokenIn`: The maximal amount of the swap input token to be swapped from the account of the sender.
+- `tokenIdOut`: The token ID of the swap output token.
+- `minAmountTokenOut`: The minimal amount of the tokens to be received by the sender for the swap to be valid.
+- `poolId`: A byte array with the pool ID specifying the pool for the swap.
+- `maxTimestampValid`: A `uint32` integer with the maximal timestamp of a block where a transaction with this command can be included.
+- `sqrtLimitPrice`: A byte array with the sqrt limit price, in `Q96` format, not to be crossed by the swap.
+
+##### Verification
+
+```python
+def verify(trs: Transaction) -> None:
+    if trs.params does not satisfy swapExactInCommandSchema:
+        raise Exception()
+    if trs.params.tokenIdIn == trs.params.tokenIdOut:
+        raise Exception()
+    poolId = trs.params.poolId
+    if poolId not in pools:
+        raise Exception()
+    if getToken0Id(poolId) != trs.params.tokenIdIn and getToken1Id(poolId) != trs.params.tokenIdIn:
+        raise Exception()
+    if getToken0Id(poolId) != trs.params.tokenIdOut and getToken1Id(poolId) != trs.params.tokenIdOut:
+        raise Exception()
+    if trs.params.maxTimestampValid < lastBlockheader.timestamp:
+        raise Exception()
+```
+
+##### Execution
+
+Processing a transaction trs with module name `MODULE_NAME_DEX` and command name `COMMAND_SWAP_WITH_PRICE_LIMIT` implies the following logic:
+
+```python
+def execute(trs: Transaction) -> None:
+    senderAddress = SHA256(trs.senderPublicKey)[:NUM_BYTES_ADDRESS]
+    tokenIdIn = trs.params.tokenIdIn
+    tokenIdOut = trs.params.tokenIdOut
+    amountTokenIn = trs.params.maxAmountTokenIn
+    poolId = trs.params.poolId
+    sqrtLimitPrice = bytesToQ96(trs.params.sqrtLimitPrice)
+
+    if sqrtLimitPrice < MIN_SQRT_RATIO or sqrtLimitPrice > MAX_SQRT_RATIO:
+        raiseSwapException(SWAP_FAILED_INVALID_LIMIT_PRICE, tokenIdIn,
+                                tokenIdOut, senderAddress)
+
+    if getToken0Id(poolId) == tokenIdIn:
+        zeroToOne = True
+    else: # getToken1Id(poolId) == tokenIn.id:
+        zeroToOne = False
+
+    try:
+        (amountIn, amountOut, feesIn, feesOut) = swap(poolId, zeroToOne, sqrtLimitPrice, amountTokenIn, True)
+    except ExceptionSwapCrossedTooManyTicks:    # specific exception class for crossing too many ticks
+        # crossed too many ticks
+        raiseSwapException(SWAP_FAILED_TOO_MANY_TICKS, tokenIdIn,
+                            tokenIdOut, senderAddress)
+
+    # check that amount out is at least the minimum required amount
+    if  amountOut <  trs.params.minAmountTokenOut:
+        raiseSwapException(SWAP_FAILED_NOT_ENOUGH, tokenIdIn,
+                            tokenIdOut, senderAddress)
+    else:
+        # make the corresponding state updates
+        # transfer and lock all the tokens involved in the multihop swap
+        transferToPool(senderAddress, poolId, tokenIdIn, amountIn)
+        transferFeesFromPool(feesIn, tokenIdIn, poolId)
+        transferFromPool(poolId, senderAddress, tokenIdOut, amountOut)
+        transferFeesFromPool(feesOut, tokenIdOut, poolId)
+
+        transferTraderIncentives(
+            [{in: feesIn, out: feesOut}],
+            [{id: tokenIdIn, amount: amountIn}, {id: tokenIdOut, amount: amountOut}],
+            senderAddress
+        )
+
+        emitEvent(
+            module = MODULE_NAME_DEX,
+            name = EVENT_NAME_SWAPPED,
+            data = {
+                "senderAddress": senderAddress,
+                "tokenIdIn": tokenIdIn,
+                "amountIn": amountIn,
+                "tokenIdOut": tokenIdOut,
+                "amountOut": amountOut
+            },
+            topics = [senderAddress]
+        )
+```
+
+where the functions `getToken0Id`, `getToken1Id`, `transferToPool`, and `transferFromPool` are defined in the [Introduce DEX module LIP][dexmodulelip].
+
+### Internal Functions
+
+In this section we specify the internal functions that are part of the processing logic in the swap command.
+
+#### swap
+
+This function computes a complete swap within a single pool (crossing as many price ticks as required as long as they are less than `MAX_NUMBER_CROSSED_TICKS`).
+This function calls the `swapWithin` function (see below) to calculate the amounts and price update within a tick range.
+Unlike the [swap function][swapuniswap] of Uniswap v3, this function does not send the output amount to an address, this will be done outside this function by calling the corresponding token module exposed functions.
+
+##### Parameters
+
+- `poolId`: The ID of the pool in which the swap is performed.
+- `zeroToOne`: A boolean with the direction of the swap, is `True` if `token0` is the input token, `token1` is the input token otherwise.
+- `sqrtLimitPrice`: A Q96 number with the price limit not to be crossed by the swap.
+- `amountSpecified`: The exact amount of tokens for the swap. It is the input amount if `exactInput == True` and is the output amount otherwise.
+- `exactInput`: A boolean indicating whether a swap is performed with exact input or with exact output.
+
+##### Returns
+
+- `amountIn`: A `uint64` with the total amount of the input token to be swapped in, including all the fees.
+- `amountOut`: A `uint64` with the total amount of the ouput token to be swapped out.
+- `totalFeesIn`: A `uint64` with the amount of fees to pay in the swap input tokens.
+- `totalFeesOut`: A `uint64` with the amount of fees to pay in the swap output tokens.
+
+##### Execution
+
+```python
+def swap(poolId: PoolID,
+    zeroToOne: bool,
+    sqrtLimitPrice: Q96,
+    amountSpecified: uint64,
+    exactInput: bool
+    ) -> tuple[uint64, uint64, uint64, uint64]:
+
+    feeTier = getFeeTier(poolId)
+    poolSqrtPriceQ96 = bytesToQ96(pools(poolId).sqrtPrice)
+
+    # check if the current price is not already beyond the limit price
+    # if zeroToOne then price decreases after the swap, otherwise it increases
+    if (zeroToOne and sqrtLimitPrice >= poolSqrtPriceQ96) or
+        (not zeroToOne and sqrtLimitPrice <= poolSqrtPriceQ96):
+        return (0,0,0,0)
+
+    numCrossedTicks = 0
+    amountRemaining = amountSpecified
+    amountTotalIn = 0
+    amountTotalOut = 0
+    totalFeesIn = 0
+    totalFeesOut = 0
+
+    # loop like Figure 4 in uniswap v3 whitepaper until amount is exhausted, price limit is reached, or max number of ticks crossed
+    # we use != for prices because otherwise we need to account for approaching limit price from above and from below
+    while(amountRemaining != 0 and poolSqrtPriceQ96 != sqrtLimitPrice):
+        if numCrossedTicks >= MAX_NUMBER_CROSSED_TICKS:
+            raise ExceptionSwapCrossedTooManyTicks() # specific exception class for crossing too many ticks
+
+        currentTick = priceToTick(poolSqrtPriceQ96)
+        if zeroToOne and tick(poolId, currentTick) exists and poolSqrtPriceQ96 ==  tickToPrice(currentTick):
+            # need to cross the current tick from right to left
+            crossTick(currentTick, False)
+            numCrossedTicks += 1
+
+        # get the price for the next tick
+        if zeroToOne:
+            nextTick = next initialized tick < currentTick
+        else:
+            nextTick = next initialized tick > currentTick
+        sqrtNextTickPriceQ96 = tickToPrice(nextTick)
+
+        if [(zeroToOne and sqrtNextTickPriceQ96 < sqrtLimitPrice) or
+                (not zeroToOne and sqrtNextTickPriceQ96 > sqrtLimitPrice)]:
+            sqrtTargetPrice = sqrtLimitPrice
+        else:
+            sqrtTargetPrice = sqrtNextTickPriceQ96
+
+        # compute the remaining amount to swap in or to get out of the swap
+        firstFee = muldiv_96_RoundUp(Q96(amountRemaining), Q96(feeTier/2), Q96(FEE_TIER_PARTITION))
+        amountRemainingTemp = amountRemaining - firstFee
+
+        # compute the swap within price tick or price limit reached
+        (poolSqrtPriceQ96, amountIn, amountOut) = swapWithin(poolSqrtPriceQ96, sqrtTargetPrice, pools(poolId).liquidity, amountRemainingTemp, exactInput)
+
+        # feeIn is feeTier/FEE_TIER_PARTITION fraction of the feeIn + amountIn
+        feeCoeff = div_96(Q96(feeTier/2), Q96(FEE_TIER_PARTITION - feeTier/2))
+        feeIn = roundUp_96(mul_96(Q96(amountIn), feeCoeff))
+        feeOut = roundUp_96(mul_96(Q96(amountOut), feeCoeff))
+        # update the remaining amount after a swap within a tick
+        if exactInput:
+            amountRemaining -= (amountIn + feeIn)
+        else:
+            amountRemaining -= (amountOut + feeOut)
+
+        amountTotalOut += amountOut + feeOut
+        amountTotalIn += amountIn + feeIn
+
+        totalFeesIn += feeIn
+        totalFeesOut += feeOut
+
+        # compute liquidity providers fees
+        validatorFeePartIn = tokenIn == TOKEN_ID_LSK ? settings.validatorsLSKRewardsPart : 0
+        validatorFeePartOut = tokenOut == TOKEN_ID_LSK ? settings.validatorsLSKRewardsPart : 0
+        liquidityFeeIn = muldiv_96(Q96(feeIn), Q96(FEE_TIER_PARTITION - protocolFeePart - validatorFeePartIn), Q96(FEE_TIER_PARTITION))
+        liquidityFeeOut = muldiv_96(Q96(feeOut), Q96(FEE_TIER_PARTITION - protocolFeePart - validatorFeePartOut), Q96(FEE_TIER_PARTITION))
+
+        if tokenIn == TOKEN_ID_LSK:
+            dexState.collectableLSKFees += liquidityFeeIn
+        if tokenOut == TOKEN_ID_LSK:
+            dexState.collectableLSKFees += liquidityFeeOut
+
+        # update liquidity provider fees
+        liquidityFee0 = zeroToOne ? liquidityFeeIn : liquidityFeeOut
+        liquidityFee1 = zeroToOne ? liquidityFeeOut : liquidityFeeIn
+        globalFeesQ96_0 = div_96(Q96(liquidityFee0), Q96(pools(poolId).liquidity))
+        globalFeesQ96_1 = div_96(Q96(liquidityFee1), Q96(pools(poolId).liquidity))
+        feeGrowthGlobal0Q96_0 = bytesToQ96(pools(poolId).feeGrowthGlobal0)
+        pools(poolId).feeGrowthGlobal0 = q96ToBytes(add_96(feeGrowthGlobal0Q96_0, globalFeesQ96_0))
+        feeGrowthGlobal1Q96_1 = bytesToQ96(pools(poolId).feeGrowthGlobal1)
+        pools(poolId).feeGrowthGlobal1 = q96ToBytes(add_96(feeGrowthGlobal1Q96_1, globalFeesQ96_1))
+
+        # if sqrtNextTickPriceQ96 was reached by increasing the price,
+        # cross the next tick from left to right
+        if poolSqrtPriceQ96 == sqrtNextTickPriceQ96 and not zeroToOne:
+            crossTick(nextTick, True)
+            numCrossedTicks += 1
+
+    # update the pool's state with the correct sqrtPrice
+    pools(poolId).sqrtPrice = q96ToBytes(poolSqrtPriceQ96)
+
+    return (amountTotalIn, amountTotalOut, totalFeesIn, totalFeesOut)
+```
+
+where the functions `bytesToQ96`, `q96ToBytes`, `getFeeTier`, `priceToTick`, `tickToPrice` and all operations on Q96 numbers are defined in the [Introduce DEX module LIP][dexmodulelip].
+
+#### swapWithin
+
+The function computes and returns the result of swapping a given amount within a single tick.
+It is an internal function of the DEX module, to be called inside the general swap loop algorithm for a given pool.
+It is a pure function and it does not update the state when executed.
+
+##### Parameters
+
+- `sqrtCurrentPrice`: A Q96 number with the pool price before the swap within a single tick.
+- `sqrtTargetPrice`: A Q96 number with the price limit not to be crossed by the swap within a single tick.
+- `liquidity`: The liquidity amount at the given tick.
+- `amountRemaining`: The amount of tokens to swap. It is the input amount if `exactInput == True` and the output amount otherwise.
+- `exactInput`: A boolean indicating whether a swap is performed with exact input or with exact output.
+
+##### Returns
+
+- `sqrtUpdatedPrice`: A `Q96` number with the sqrt price after swapping the amount in/out, not to exceed the price target.
+- `amountIn`: A `uint64` with the amount to be swapped in.
+- `amountOut`: A `uint64` with the amount of a token to be swapped out.
+
+##### Execution
+
+```python
+def swapWithin(
+    sqrtCurrentPrice: Q96,
+    sqrtTargetPrice: Q96,
+    liquidity: uint64,
+    amountRemaining: uint64,
+    exactInput: bool
+    ) -> tuple[Q96, uint64, uint64]:
+
+    # check the direction of the trade (token1 <--> token 0)
+    zeroToOne = sqrtCurrentPrice >= sqrtTargetPrice
+
+    # check how much amount-in we need to get to sqrtTargetPrice from sqrtCurrentPrice
+    if exactInput:
+       if zeroToOne:
+           amountIn = getAmount0Delta(sqrtCurrentPrice, sqrtTargetPrice, liquidity, True)
+       else:
+           amountIn = getAmount1Delta(sqrtCurrentPrice, sqrtTargetPrice, liquidity, True)
+    else:
+        if zeroToOne:
+            amountOut = getAmount1Delta(sqrtCurrentPrice, sqrtTargetPrice, liquidity, False)
+        else:
+            amountOut = getAmount0Delta(sqrtCurrentPrice, sqrtTargetPrice, liquidity, False)
+
+    # update sqrtUpdatedPrice accordingly
+
+    if (exactInput and amountRemaining >= amountIn) or (not exactInput and amountRemaining >= amountOut):
+        # enough tokens to change price to target price
+        sqrtUpdatedPrice = sqrtTargetPrice
+    else:
+        # update price depending on whether amountRemaining represents token0 or token1
+        # and whether it is amount to add to the pool (exactInput) or subtract from the pool.
+        sqrtUpdatedPrice = computeNextPrice(sqrtCurrentPrice, liquidity, amountRemaining, zeroToOne, exactInput)
+
+    # calculate the actual input and output amounts. The updated price guarantees that amountRemaining
+    # will not be exceeded, independently whether it is of token0 or token1
+    if zeroToOne:
+        amountIn = getAmount0Delta(sqrtCurrentPrice, sqrtUpdatedPrice, liquidity, True)
+        amountOut = getAmount1Delta(sqrtCurrentPrice, sqrtUpdatedPrice, liquidity, False)
+    else:
+        amountIn = getAmount1Delta(sqrtCurrentPrice, sqrtUpdatedPrice, liquidity, True)
+        amountOut = getAmount0Delta(sqrtCurrentPrice, sqrtUpdatedPrice, liquidity, False)
+
+    return (sqrtUpdatedPrice, amountIn, amountOut)
+
+```
+
+where the functions `getAmount0Delta`, `getAmount1Delta` and `computeNextPrice` are defined in the [Introduce DEX module LIP][dexmodulelip].
+
+
+#### crossTick
+
+The function crosses a tick either from left to right or from right to left by updating all the necessary state store information.
+
+```python
+def crossTick(tickId: TickID, leftToRight: bool) -> None:
+    poolId = tickId[:NUM_BYTES_POOL_ID]
+    # update liquidity
+    if leftToRight:
+        pools(poolId).liquidity += tick(poolId, tickId).liquidityNet
+    else:
+        pools(poolId).liquidity -= tick(poolId, tickId).liquidityNet
+
+    # update fee growth outside
+    feeGrowthGlobal0Q96 = bytesToQ96(pools(poolId).feeGrowthGlobal0)
+    feeGrowthOutside0Q96 = bytesToQ96(tick(poolId, tickId).feeGrowthOutside0)
+    tick(poolId, tickId).feeGrowthOutside0 = q96ToBytes(sub_96(feeGrowthGlobal0Q96, feeGrowthOutside0Q96))
+    feeGrowthGlobal1Q96 = bytesToQ96(pools(poolId).feeGrowthGlobal1)
+    feeGrowthOutside1Q96 = bytesToQ96(tick(poolId, tickId).feeGrowthOutside1)
+    tick(poolId, tickId).feeGrowthOutside1 = q96ToBytes(sub_96(feeGrowthGlobal1Q96, feeGrowthOutside1Q96))
+```
+
+#### transferFeesFromPool
+
+The function computes the correct amount of validator and protocol fees, transfers them from the given pool address to the protocol fee address and the validator rewards pool, and locks the transferred tokens.
+
+```python
+def transferFeesFromPool(amount: int, id: TokenID, pool: PoolID) -> None:
+    protocolFee = roundDown_96(muldiv_96(Q96(amount), Q96(settings.protocolFeePart), Q96(FEE_TIER_PARTITION)))
+    validatorFee = 0
+    if id == TOKEN_ID_LSK:
+        validatorFee = roundDown_96(muldiv_96(Q96(amount), Q96(settings.validatorsLSKRewardsPart), Q96(FEE_TIER_PARTITION)))
+
+    if protocolFee > 0:
+        transferFromPool(pool, settings.protocolFeeAddress, id, protocolFee)
+        Token.lock(settings.protocolFeeAddress, MODULE_NAME_DEX, id, protocolFee)
+    if validatorFee > 0:
+        transferFromPool(pool, ADDRESS_VALIDATORS_REWARDS_POOL, id, validatorFee)
+        Token.lock(ADDRESS_VALIDATORS_REWARDS_POOL, MODULE_NAME_DEX, id, validatorFee)
+```
+
+#### transferTraderIncentives
+
+The function computes the amount of trader incentives from the fees payed in LSK using the formula `traderIncentivesBalance/GOAL_BALANCE_TRADER_REWARDS_POOL * lskFeesPaid` and transfers to the given traders account. Here `traderIncentivesBalance` is the balance of the trader incentives pool, constant `GOAL_BALANCE_TRADER_REWARDS_POOL` is defined in the [Introduce DEX module LIP][dexmodulelip] and `lskFeesPaid` is the amount of fees in LSK paid by trader.
+
+##### Parameters
+
+- `fees`: an array of input and output fees for every swap along the swap route.
+- `tokens`: an array of token objects along the swap route, each entry contains the token ID..
+- `address`: the address to which the trader incentives are transferred.
+
+##### Execution
+
+```python
+def transferTraderIncentives(fees: list[object], tokens: list[object], address: Address) -> None:
+    lskFeesPaid = 0
+    for i in range(fees):
+        if tokens[i].id == TOKEN_ID_LSK:
+            lskFeesPaid += fees[i].in
+        if tokens[i+1].id == TOKEN_ID_LSK:
+            lskFeesPaid += fees[i].out
+
+    # total LSK fees are computed as validatorFees / validatorFeePart
+    traderIncentivesBalance = Token.getAvailableBalance(ADDRESS_TRADERS_REWARDS_POOL, TOKEN_ID_REWARDS)
+    rewards = traderIncentivesBalance / GOAL_BALANCE_TRADER_REWARDS_POOL * lskFeesPaid
+    Token.unlock(ADDRESS_TRADERS_REWARDS_POOL, MODULE_NAME_DEX, TOKEN_ID_REWARDS, rewards)
+    Token.transfer(ADDRESS_TRADERS_REWARDS_POOL, address, TOKEN_ID_REWARDS, rewards)
+```
+
+#### raiseSwapException
+
+The function raises an exception during a failed swap and it emits the necessary persistent event.
+
+```python
+def raiseSwapException(reason: int, tokenIn: TokenID, tokenOut: TokenID, senderAddress: Address) -> None:
+    # should not happen
+    emitPersistentEvent(
+        module = MODULE_NAME_DEX,
+        name = EVENT_NAME_SWAP_FAILED,
+        data = {
+            "senderAddress": senderAddress,
+            "tokenIdIn": tokenIn,
+            "tokenIdOut": tokenOut,
+            "reason": reason
+        },
+        topics = [senderAddress]
+    )
+    raise Exception()
+```
+
+## Appendix
+
+### DEX routing
+
+#### Rationale
+
+The commands “swap with exact input” and “swap with exact output” expect a swap route as an input parameter. The protocol logic does not specify how a trader may obtain such a route, and this could be a hard task for some pair of input and output tokens. The task of finding a swap route could be solved by a separate service called router (or DEX router). The router could be integrated with the online DEX user interface.
+
+There are several advantages to the off-chain routing. Firstly, the on-chain computations are limited in memory and performance. Secondly, the algorithm of an off-chain service can be easily updated without a need for a hard fork.
+
+Decentralized exchange offers a new utility case for LSK token, namely a main liquidity token for swaps, which simplifies the routing algorithm. Using LSK as a liquidity token also allows to keep swap slippage reasonably small.
+
+#### Structure of DEX router
+
+The DEX router can be implemented as part of the Service instance of the DEX sidechain. The DEX router is comprised of internal logic and storage, an interface for the UI to obtain routes for swaps, and it would interact with full nodes of the DEX sidechain to dry run transactions. More specifically, the DEX router needs to dry run the different swap commands and fetch the emitted events in order to estimate the outcome of different swaps.
+
+Additionally the DEX router maintains a **pools graph**, where the set of vertices consists of all the token IDs contained in DEX pools and the set of edges consists of all pool IDs. Two vertices are connected by an edge in the pools graph if there is a pool with the two tokens corresponding to the vertices. This construction simplifies the routing, making it essentially a problem of finding a path in the graph.
+
+We assume that the LSK token will be the most liquid and prominent token in the Lisk ecosystem. Therefore, for any other token we generally assume that a pool with the LSK token will be the most utilized by traders and most liquid due to the amount of liquidity provided. By focusing the incentives on LSK pools, we further want to strengthen this focus for traders and liquidity providers on LSK pools. This has the benefit that liquidity is not scattered around many different pools of tokens, but focused on the LSK pools which will allow for lower slippage and therefore better user experience for traders. It further greatly simplifies the router algorithm, as we assume that for any tokens the best route is either a direct swap or a swap via the LSK token.
+
+#### Specification
+
+LSK token acts as a liquidity token in the decentralized exchange, so the swap traffic is routed via it. The routing algorithm thus is governed by the following principles:
+
+- If there exists a swap route for a given input and output tokens, the routing algorithm returns a non-empty route.
+- The router prefers swap routes via the LSK token.
+- When possible, the swap router returns the optimal route.
+
+The sketch of the algorithm:
+
+1. For a pair of input/output tokens try to find all paths directly via LSK in 2 hops. There might be several because of different pool fee tiers.
+2. If no paths directly via LSK can be found, try to find all direct paths between input/output tokens.
+
+Paths found in steps 1. or 2. are _regular_.
+
+3. If there are regular paths, dry run all of them and return the most optimal.
+4. If no regular paths are found, perform a breadth-first search on the pools graph to find a path between input and output tokens and return it without dry running. This path is called _exceptional_.
+
+Next the algorithm is specified precisely.
+
+##### Pools graph
+
+Let `pools` denote the pools substore as an object.
+
+Function `constructPoolsGraph` constructs an undirected multigraph and returns a tuple of vertices and edges of this pools graph.
+
+```python
+def constructPoolsGraph(pools) -> PoolsGraph:
+    vertices = set()        # empty set, no duplicated elements allowed
+    for poolId in pools:
+        vertices.add(getToken0Id(poolId))
+        vertices.add(getToken1Id(poolId))
+    edges = pools.keys()
+    return (vertices, edges)
+```
+
+Function `getAdjacent` takes a pools graph and a vertex as an input. It returns a list of all edges [incident](<https://en.wikipedia.org/wiki/Incidence_(graph)>) to the given vertex together with the second incident vertex.
+
+```python
+def getAdjacent(poolsGraph: PoolsGraph, vertex: TokenID) -> list[object]:
+    result = []
+    for edge in pools:
+        if getToken0Id(edge) == vertex:
+            adjacent = getToken1Id(edge)
+            result.add({edge: edge, vertex: adjacent})
+        else if getToken1Id(edge) == vertex:
+            adjacent = getToken0Id(edge)
+            result.add({edge: edge, vertex: adjacent})
+    return result
+```
+
+##### Computing routes
+
+Function `computeRegularRoute` returns a sequence of vertices in a regular route between the given vertices or empty array if such route does not exist. A regular route swaps via LSK if possible, or directly between two tokens otherwise. The return value is either empty, or has `tokenIn` as the first value and `tokenOut` as the last.
+
+```python
+def computeRegularRoute(tokenIn: TokenID, tokenOut: TokenID, poolsGraph: PoolsGraph) -> list[TokenID]:
+    lskAdjacent = getAdjacent(poolsGraph, TOKEN_ID_LSK)
+    if tokenIn in lskAdjacent and tokenOut in lskAdjacent:
+        # swap via LSK
+        return [tokenIn, TOKEN_ID_LSK, tokenOut]
+    else if tokenOut in getAdjacent(poolsGraph, tokenIn):
+        # direct swap
+        return [tokenIn, tokenOut]
+    else:
+        # no regular routes found
+        return []
+```
+
+Function `computeExceptionalRoute` returns a sequence of vertices in a route between two tokens in pools graph. The return value is either empty if the route does not exist, or has `tokenIn` as the first value and `tokenOut` as the last.
+
+```python
+def computeExceptionalRoute(tokenIn: TokenID, tokenOut: TokenID, poolsGraph: PoolsGraph) -> list[TokenID]:
+    result = []
+    routes = queue([])  # empty FIFO for breadth graph search
+    routes.add({path: [], endVertex: tokenIn})
+    visited = [tokenIn]
+    # graph breadth search
+    while routes not empty:
+        route = routes.get()    # the next route in queue, pushes it out of the queue
+        if route.endVertex == tokenOut:
+            return route.path.add(tokenOut)
+        for adjacent in getAdjacent(poolsGraph, route.endVertex):
+            if adjacent.vertex not in visited:
+                routes.add({path: copy(route.path).add(adjacent.edge),
+                endVertex: adjacent.vertex})
+                visited.add(adjacent.vertex)
+    return []
+```
+
+Function `getOptimalSwapPool` finds a pool to swap given amount of tokens with the best value for user. If there is no direct pool then an exception is thrown. The function dry runs swap transactions and is thus computationally intense.
+
+```python
+def getOptimalSwapPool(tokenIn: TokenID, tokenOut: TokenID, amount: int,
+                        exactIn: bool) -> tuple(PoolID, int):
+    token0, token1 = tokenIn, tokenOut sorted lexicographically
+    candidatePools = []
+    for setting in settings.poolCreationSettings:
+        # all possible pools to swap token0 and token1
+        potentialPoolId = token0 + token1 + setting.feeTier.to_bytes(4, byteorder='big')
+        if potentialPoolId in pools:
+            candidatePools.add(potentialPoolId)
+    if candidatePools is empty:
+        raise Exception("No pool swapping this pair of tokens")
+
+    computedAmounts = []
+    for pool in candidatePools:
+        if exactIn:
+            dry run swap with exact input command with: {
+                "tokenIdIn": tokenIn,
+                "amountTokenIn": amount,
+                "tokenIdOut": tokenOut,
+                "minAmountTokenOut": 0,
+                "swapRoute": [pool],
+                "maxTimestampValid": MAX_UINT_32
+            }
+            # we assume that transaction succeeded
+            let amountOut be the value of "amountOut" field in the Swapped event
+            computedAmounts.add(amountOut)
+        else:
+            dry run swap with exact output command with: {
+                "tokenIdIn": tokenIn,
+                "maxAmountTokenIn": MAX_UINT_64,
+                "tokenIdOut": tokenOut,
+                "amountTokenOut": amount,
+                "swapRoute": [pool],
+                "maxTimestampValid": MAX_UINT_32
+            }
+            # we assume that transaction succeeded
+            let amountIn be the value of "amountIn" field in the Swapped event
+            computedAmounts.add(amountIn)
+    if exactIn:
+        let i be the index of a maximal element in computedAmounts
+    else:
+        let i be the index of a minimal element in computedAmounts
+    return (candidatePools[i], computedAmounts[i])
+```
+
+##### Routing algorithm
+
+Function `getRoute` implements the routing algorithm to find a swapping route between a given pair of tokens.
+
+- `tokenIn`: The token ID of the input token.
+- `tokenOut`: The token ID of the output token.
+- `poolsGraph`: The tuple of vertices and edges of the pools graph.
+- `amount`: The amount of tokens to be swapped. It could be either exact input amount or exact output amount depending on the `exactIn` flag.
+- `exactIn`: If `True` then the route is found for the exact input command, otherwise for the exact output command.
+
+```python
+def getRoute(tokenIn: TokenID, tokenOut: TokenID, poolsGraph: PoolsGraph, amount: int,
+                exactIn: bool) -> list[TokenID]:
+    bestRoute = []
+    regularRoute = computeRegularRoute(tokenIn, tokenOut, poolsGraph)
+    # dry run regular routes if not empty
+    if regularRoute not empty:
+        if exactIn:
+            poolTokenIn = tokenIn
+            poolAmountIn = amount
+            # find most optimal pools along the route
+            for poolTokenOut in regularRoute[1:]:
+                (optimalPool, poolAmountOut) = getOptimalSwapPool(
+                    poolTokenIn, poolTokenOut, poolAmountIn, exactIn)
+                bestRoute.add(optimalPool)
+                poolTokenIn = poolTokenOut
+                poolAmountIn = poolAmountOut
+        else:
+            poolTokenOut = tokenOut
+            poolAmountOut = amount
+            for poolTokenIn in reversed regularRoute[:-1]:
+                (optimalPool, poolAmountIn) = getOptimalSwapPool(
+                    poolTokenIn, poolTokenOut, poolAmountOut, exactIn)
+                bestRoute.add(optimalPool)
+                poolTokenOut = poolTokenIn
+                poolAmountOut = poolAmountIn
+            bestRoute = reverse bestRoute   # the output of router can be used directly as the swapRoute parameter
+        return bestRoute
+
+    exceptionalRoute = computeExceptionalRoute(tokenIn, tokenOut, poolsGraph)
+    if route is empty or length(exceptionalRoute) > MAX_HOPS_SWAP:
+        # no valid route is found
+        return []
+    # find pool sequence with the best liquidity at the current price
+    poolTokenIn = tokenIn
+    for poolTokenOut in exceptionalRoute[1:]:
+        candidatePools = []
+        token0, token1 = poolTokenIn, poolTokenOut sorted lexicographically
+        for setting in settings.poolCreationSettings:
+            # all possible pools to swap tokenIn and tokenOut
+            candidatePools.add(token0 + token1 + setting.feeTier.to_bytes(4, byteorder='big'))
+        let bestPool be pool in candidatePools with maximal pools(pool).liquidity
+        bestRoute.add(bestPool)
+        poolTokenIn = poolTokenOut
+    return bestRoute
+```
+
+[dexmodulelip]: https://github.com/LiskHQ/lips-staging/blob/lip-Introduce_DEX_Module/proposals/lip-introduce_DEX_Module.md
+[dexmodulelipappendix]: https://github.com/LiskHQ/lips-staging/blob/lip-Introduce_DEX_Module/proposals/lip-introduce_DEX_Module.md#Appendix
+[uniswapv3whitepaper]: https://uniswap.org/whitepaper-v3.pdf
+[tokenidlip]: https://github.com/LiskHQ/lips/blob/main/proposals/lip-0051.md#token-identification
+[swapuniswap]: https://github.com/Uniswap/v3-core/blob/c05a0e2c8c08c460fb4d05cfdda30b3ad8deeaac/contracts/UniswapV3Pool.sol#L596
