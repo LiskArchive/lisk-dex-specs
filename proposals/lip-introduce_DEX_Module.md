@@ -59,7 +59,7 @@ See also the [Uniswap v3 implementation][UniswapV3Ticks].
 
 ## Specification
 
-In this LIP, we specify the state store, internal auxiliary functions, internal math functions, protocol logic for other modules, and endpoints for other modules of the DEX module. The DEX module has module ID `MODULE_ID_DEX`.
+In this LIP, we specify the state store, internal auxiliary functions, internal math functions, protocol logic for other modules, and endpoints for other modules of the DEX module. The DEX module has name `MODULE_NAME_DEX`.
 
 ### Types
 
@@ -101,50 +101,53 @@ We define the following constants:
 | **General Constants**                |        |                  |                            |                            
 | `NUM_BYTES_ADDRESS`                | `uint32` | 20                     | The number of bytes of an address.  |     
 | `MAX_NUM_BYTES_Q96`                    | `uint32` | 24                    | The maximal number of bytes of a serialized fractional number in Q96 format. |
-| `ADDRESS_LIQUIDITY_PROVIDERS_REWARDS_POOL`                    | bytes |  `SHA256(b"liquidityProvidersRewardsPool")[:20]`  | The address of the liquidity providers rewards pool.  |
-| `ADDRESS_TRADERS_REWARDS_POOL`                    | bytes |  `SHA256(b"tradersRewardsPool")[:20]`  | The address of the traders rewards pool.  |
-| `ADDRESS_VALIDATORS_REWARDS_POOL`                    | bytes |  `SHA256(b"validatorsRewardsPool")[:20]`  | The address of the validators rewards pool.  |
+| `ADDRESS_LIQUIDITY_PROVIDER_REWARDS_POOL`                    | bytes |  `SHA256(b"liquidityProviderRewardsPool")[:NUM_BYTES_ADDRESS]`  | The address of the liquidity provider rewards pool.  |
+| `ADDRESS_TRADER_REWARDS_POOL`                    | bytes |  `SHA256(b"traderRewardsPool")[:NUM_BYTES_ADDRESS]`  | The address of the trader rewards pool.  |
+| `ADDRESS_VALIDATOR_REWARDS_POOL`                    | bytes |  `SHA256(b"validatorRewardsPool")[:20]`  | The address of the validator rewards pool.  |
+| `MAX_UINT_32`                            |    `uint32`    | 4294967295 | Maximal value of a `uint32` number   |
+| `MAX_UINT_64`         |       `uint64`    | 18446744073709551615      |   Maximal value of a `uint64` number  |
 | **DEX Module Constants**                |        |                  |                            |                            
-| `MODULE_ID_DEX`                | bytes | TBA                     | ID of the DEX module.  |     
-| `NUM_BYTES_POOL_ID`                | `uint32` | 16                     | The number of bytes of a pool ID.  |    
-| `NUM_BYTES_TICK_ID`                | `uint32` | 20                     | The number of bytes of a price tick ID.  |      
-| `NUM_BYTES_POSITION_ID`                | `uint32` | 24                     | The number of bytes of a position ID.  |     
+| `MODULE_NAME_DEX`                | string | "dex"                     | Name of the DEX module.  |     
+| `NUM_BYTES_POOL_ID`                | `uint32` | 20                     | The number of bytes of a pool ID.  |    
+| `NUM_BYTES_TICK_ID`                | `uint32` | 24                     | The number of bytes of a price tick ID.  |      
+| `NUM_BYTES_POSITION_ID`                | `uint32` | 28                     | The number of bytes of a position ID.  |     
 | `MAX_NUMBER_CROSSED_TICKS`                | `uint32` | TBA                     | Maximum number of price ticks to be crossed by a single swap.  |
 | `MAX_HOPS_SWAP`                | `uint32` | TBA                     | Maximum number of different pools that a complete swap can interact with.  |   
 | `MAX_NUM_POSITIONS_FEE_COLLECTION`  | `uint32` | TBD            | The maximum number of positions for which it is possible to collect fees in one transaction.                                 |
 | `TOKEN_ID_FEE_DEX`        | bytes | TBD    | The ID of the token used for fees. This defines the type of token in which the additional fees for pool creation and position creation are paid.         |
 | `TOKEN_ID_REWARDS`        | bytes | TBD    | The token ID of the token used for liquidity provider, trader and validator incentives.         |
 | `POOL_CREATION_FEE`       | `uint64` | TBD    | This amount of tokens is transferred to the protocol fee account when creating a new pool.|
-| `POSITION_CREATION_FEE`   | `uint64` | TBD    | This amount of tokens is transferred to the protocol fee account when creating a new position.|                          
+| `POSITION_CREATION_FEE`   | `uint64` | TBD    | This amount of tokens is transferred to the protocol fee account when creating a new position.|       
+| `TARGET_BALANCE_TRADER_REWARDS_POOL`    | `uint64`  | TBD       |      The goal balance of the trader rewards pool, is used to compute trader incentives.      |                   
 | **Token Module Constants**                |        |                  |                           |                            
 | `CHAIN_ID_ALIAS_NATIVE`              |  bytes |   0x0000           |    `chainID` value of a native token.     |      
 | `NUM_BYTES_TOKEN_ID`                | `uint32` | 8                     | The number of bytes of a token ID.  |                      
 | **DEX Module Store**                    |        |                  | |                                                       |
-| `STORE_PREFIX_STATE`                    | bytes  | 0x0000           | Store prefix of the DEX global state substore. |                                                       |
-| `STORE_PREFIX_POOL`                    | bytes  | 0x4000           | Store prefix of the pools substore. |
-| `STORE_PREFIX_PRICE_TICK`                    | bytes  | 0x8000           | Store prefix of the price tick substore. |
-| `STORE_PREFIX_POSITION`                    | bytes  | 0xc000           | Store prefix of the positions substore. |
-| `STORE_PREFIX_SETTINGS`                    | bytes  | 0xe000           | Store prefix of the protocol settings substore. |
-| **DEX Module Command IDs**              |        |                  |                                                |
-| `COMMAND_ID_SWAP_EXACT_INPUT`                    | bytes | 0x0000                | Command ID of swap exact input command. |
-| `COMMAND_ID_SWAP_EXACT_OUTPUT`                   | bytes | 0x0001                | Command ID of swap exact output command. |
-| `COMMAND_ID_SWAP_WITH_PRICE_LIMIT`               | bytes | 0x0002                | Command ID of swap with price limit command. |
-| `COMMAND_ID_CREATE_POOL`                    | bytes | 0x0003                | Command ID of create pool command. |
-| `COMMAND_ID_CREATE_POSITION`                    | bytes | 0x0004                | Command ID of create position command. |
-| `COMMAND_ID_ADD_LIQUIDITY`                    | bytes | 0x0005                | Command ID of add liquidity command. |
-| `COMMAND_ID_REMOVE_LIQUIDITY`                 | bytes | 0x0006                | Command ID of remove liquidity command. |
-| `COMMAND_ID_COLLECT_FEES`                 | bytes | 0x0007                | Command ID of collect fees command. |
-| **DEX Module event type IDs**              |        |                  |                                                |
-| `TYPE_ID_AMOUNT_BELOW_MIN`                 | `uint32` |         0        | Type ID of the `AmountBelowMin` event. |
-| `TYPE_ID_FEES_INCENTIVES_COLLECTED`                 | `uint32` |         1        | Type ID of the `FeesIncentivesCollected` event. |
-| `TYPE_ID_POOL_CREATED`                 | `uint32` |         2        | Type ID of the `PoolCreated` event. |
-| `TYPE_ID_POOL_CREATION_FAILED`                 | `uint32` |       3          | Type ID of the `PoolCreationFailed` event. |
-| `TYPE_ID_POSITION_CREATED`                 | `uint32` |        4         | Type ID of the `PositionCreated` event. |
-| `TYPE_ID_POSITION_CREATION_FAILED`                 | `uint32` |         5        | Type ID of the `PositionCreationFailed` event. |
-| `TYPE_ID_POSITION_UDPATED`                 | `uint32` |          6       | Type ID of the `PositionUpdated` event. |
-| `TYPE_ID_POSITION_UDPATE_FAILED`                 | `uint32` |       7          | Type ID of the `PositionUpdateFailed` event. |
-| `TYPE_ID_SWAPED`                 | `uint32` |         8        | Type ID of the `Swapped` event. |
-| `TYPE_ID_SWAP_FAILED`                 | `uint32` |       9          | Type ID of the `SwapFailed` event. |
+| `SUBSTORE_PREFIX_STATE`                    | bytes  | 0x0000           | Substore prefix of the DEX global state substore. |                                                       |
+| `SUBSTORE_PREFIX_POOL`                    | bytes  | 0x4000           | Substore prefix of the pools substore. |
+| `SUBSTORE_PREFIX_PRICE_TICK`                    | bytes  | 0x8000           | Substore prefix of the price tick substore. |
+| `SUBSTORE_PREFIX_POSITION`                    | bytes  | 0xc000           | Substore prefix of the positions substore. |
+| `SUBSTORE_PREFIX_SETTINGS`                    | bytes  | 0xe000           | Substore prefix of the protocol settings substore. |
+| **DEX Module Command Names**              |        |                  |                                                |
+| `COMMAND_SWAP_EXACT_INPUT`                    | string | "swapExactInput"                | Command name of swap exact input command. |
+| `COMMAND_SWAP_EXACT_OUTPUT`                   | string | "swapExactOutput"                | Command name of swap exact output command. |
+| `COMMAND_SWAP_WITH_PRICE_LIMIT`               | string | "swapPriceLimit"                | Command name of swap with price limit command. |
+| `COMMAND_CREATE_POOL`                    | string | "createPool"                | Command name of create pool command. |
+| `COMMAND_CREATE_POSITION`                    | string | "createPosition"               | Command name of create position command. |
+| `COMMAND_ADD_LIQUIDITY`                    | string | "addLiquidity"                | Command name of add liquidity command. |
+| `COMMAND_REMOVE_LIQUIDITY`                 | string | "removeLiquidity"                | Command name of remove liquidity command. |
+| `COMMAND_COLLECT_FEES`                 | string | "collectFees"                | Command name of collect fees command. |
+| **DEX Module event names**              |        |                  |                                                |
+| `EVENT_NAME_AMOUNT_BELOW_MIN`                 | string |     "amountBelowMin"     | Event name of the `AmountBelowMin` event. |
+| `EVENT_NAME_FEES_INCENTIVES_COLLECTED`                 | string |     "feesIncentivesCollected"       | Event name of the `FeesIncentivesCollected` event. |
+| `EVENT_NAME_POOL_CREATED`                 | string |        "poolCreated"        | Event name of the `PoolCreated` event. |
+| `EVENT_NAME_POOL_CREATION_FAILED`                 | string |       "poolCreationFailed"          | Event name of the `PoolCreationFailed` event. |
+| `EVENT_NAME_POSITION_CREATED`                 | string |      "positionCreated"        | Event name of the `PositionCreated` event. |
+| `EVENT_NAME_POSITION_CREATION_FAILED`                 | string |   "positionCreationFailed"   | Event name ID of the `PositionCreationFailed` event. |
+| `EVENT_NAME_POSITION_UDPATED`                 | string |  "positionUpdated"  | Event name ID of the `PositionUpdated` event. |
+| `EVENT_NAME_POSITION_UDPATE_FAILED`                 | string |   "positionUpdateFailed"   | Event name of the `PositionUpdateFailed` event. |
+| `EVENT_NAME_SWAPED`                 | string |     "swapped"  | Event name of the `Swapped` event. |
+| `EVENT_NAME_SWAP_FAILED`                 | string |       "swapFailed"      | Event name of the `SwapFailed` event. |
 | **Math Constants**                         |        |                  |                                              |    
 | `MIN_TICK`                                  | `sint32`  | -887272     | The minimum possible tick value as a sint32. |
 | `MAX_TICK`                              | `sint32` | 887272       | The maximum possible tick value as a sint32. |
@@ -170,12 +173,12 @@ The key-value pairs in the module store are organized as follows:
 
 #### DEX Global State substore
 
-##### Store Prefix, Store Key, and Store Value
+##### Substore Prefix, Store Key, and Store Value
 
-* The store prefix is set to `STORE_PREFIX_STATE`.
+* The substore prefix is set to `SUBSTORE_PREFIX_STATE`.
 * The store key is empty bytes.
 * The store value is the serialization of an object following the JSON schema `dexGlobalStateSchema` presented below.
-* Notation: We let `dexGlobalState` denote the object stored in the DEX module store with store prefix `STORE_PREFIX_STATE` and empty key.
+* Notation: We let `dexGlobalState` denote the object stored in the DEX module store with substore prefix `SUBSTORE_PREFIX_STATE` and empty key.
 
 ##### JSON Schema
 
@@ -208,12 +211,12 @@ In this section, we describe the properties of DEX global state substore.
 
 #### Pools Substore
 
-##### Store Prefix, Store Key, and Store Value
+##### Substore Prefix, Store Key, and Store Value
 
-* The store prefix is set to `STORE_PREFIX_POOLS`.
+* The substore prefix is set to `SUBSTORE_PREFIX_POOLS`.
 * The store key is a byte array of length `NUM_BYTES_POOL_ID` representing a pool ID.
 * Each store value is the serialization of an object following the JSON schema `poolsSchema` presented below.
-* Notation: We let `pools(poolId)` denote the object stored in the DEX module store with store prefix `STORE_PREFIX_POOLS` and key equal to `poolId`.
+* Notation: We let `pools(poolId)` denote the object stored in the DEX module store with substore prefix `SUBSTORE_PREFIX_POOLS` and key equal to `poolId`.
 
 The ID of the pool, `poolId` is defined as the concatenation of
 
@@ -296,9 +299,9 @@ def bytesToTick(serializedTick: bytes) -> int32:
 
 Note that everywhere else the price ticks are serialized as usual `sint32` numbers.
 
-##### Store Prefix, Store Key, and Store Value
+##### Substore Prefix, Store Key, and Store Value
 
-* The store prefix is set to `STORE_PREFIX_PRICE_TICK`.
+* The substore prefix is set to `SUBSTORE_PREFIX_PRICE_TICK`.
 * Each store key is a byte array `poolId + tickToBytes(tickValue)` of length `NUM_BYTES_TICK_ID`, for a byte array `poolId` of length `NUM_BYTES_POOL_ID` presenting a pool ID and a tick value `tickValue`.
 * Each store value is the serialization of an object following the JSON schema `priceTickSchema` presented below.
 * We denote `tick(poolId, tickValue)` to be the price tick substore value with key `poolId + tickToBytes(tickValue)`.
@@ -348,12 +351,12 @@ In this section, we describe the properties of price tick substore.
 
 #### Positions substore
 
-##### Store Prefix, Store Key, and Store Value
+##### Substore Prefix, Store Key, and Store Value
 
-* The store prefix is set to `STORE_PREFIX_POSITION`.
+* The substore prefix is set to `SUBSTORE_PREFIX_POSITION`.
 * Each store key is a byte array of length `NUM_BYTES_POSITION_ID` representing a position ID.
 * Each store value is the serialization of an object following the JSON schema `positionSchema` presented below.
-* Notation: We let `positions(positionId)` denote the object stored in the DEX module store with store prefix `STORE_PREFIX_POSITION` and key equal to `positionId`.
+* Notation: We let `positions(positionId)` denote the object stored in the DEX module store with substore prefix `SUBSTORE_PREFIX_POSITION` and key equal to `positionId`.
 
 A position ID is a byte array of length `NUM_BYTES_POSITION_ID` given by `poolId + index.to_bytes(8, byteorder = 'big', signed = False)`, where `poolId` is the pool ID of the corresponding pool and `index` the index of the position. Indices are assigned to the positions sequentially among all the positions in all pools.
 
@@ -415,12 +418,12 @@ In this section, we describe the properties of positions substore.
 
 #### Protocol settings substore
 
-##### Store Prefix, Store Key, and Store Value
+##### Substore Prefix, Store Key, and Store Value
 
-* The store prefix is `STORE_PREFIX_SETTINGS`.
+* The substore prefix is `SUBSTORE_PREFIX_SETTINGS`.
 * The store key is empty bytes.
 * The store value is the serialization of an object following the JSON schema `settingsSchema`.
-* Notation: We let `settings` denote the object stored in the DEX module store with store prefix `STORE_PREFIX_SETTINGS` and key equal to empty bytes.
+* Notation: We let `settings` denote the object stored in the DEX module store with substore prefix `SUBSTORE_PREFIX_SETTINGS` and key equal to empty bytes.
 
 ```java
 settingsSchema = {
@@ -541,7 +544,7 @@ def transferToPool(
     ) -> None:
     poolAddress = poolIdToAddress(poolId)
     Token.transfer(senderAddress, poolAddress, tokenID, amount)
-    Token.lock(poolAddress, MODULE_ID_DEX, tokenID, amount)
+    Token.lock(poolAddress, MODULE_NAME_DEX, tokenID, amount)
 ```  
 #### transferFromPool
 
@@ -555,7 +558,7 @@ def transferFromPool(
     amount: uint64
     ) -> None:
     poolAddress = poolIdToAddress(poolId)
-    Token.unlock(poolAddress, MODULE_ID_DEX, tokenID, amount)
+    Token.unlock(poolAddress, MODULE_NAME_DEX, tokenID, amount)
     Token.transfer(poolAddress, recipientAddress, tokenID, amount)
 ```
 
@@ -581,9 +584,9 @@ def transferPoolToPool(
     ) -> None:
     poolAddressSend = poolIdToAddress(poolIdSend)
     poolAddressReceive = poolIdToAddress(poolIdReceive)
-    Token.unlock(poolAddressSend, MODULE_ID_DEX, tokenID, amount)
+    Token.unlock(poolAddressSend, MODULE_NAME_DEX, tokenID, amount)
     Token.transfer(poolAddressSend, poolAddressReceive, tokenID, amount)
-    Token.lock(poolAddressReceive, MODULE_ID_DEX, tokenID, amount)
+    Token.lock(poolAddressReceive, MODULE_NAME_DEX, tokenID, amount)
 ```
 
 #### transferToProtocolFeeAccount
