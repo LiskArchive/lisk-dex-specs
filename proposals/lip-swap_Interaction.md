@@ -41,9 +41,9 @@ All swap commands offer protection against too high slippage. When requesting a 
 
 ### Fees and incentives
 
-Trader pays certain part of the swap amount as fees, depending on the fee tier of the pool. Fees are paid in both input and output tokens, for multihop swaps the fees are also paid in all intermediate tokens. Fees are split between protocol and liquidity providers, additionally all LSK fees are shared with the exchange sidechain validators. The fee parts for different actors are given in the settings substore of the DEX module. The traders are incentivised to swap LSK tokens: for every fee paid in LSK the trader received certain amount of `TOKEN_ID_REWARDS` tokens.
+Trader pays certain part of the swap amount as fees, depending on the fee tier of the pool. Fees are paid in both input and output tokens, for multihop swaps the fees are also paid in all intermediate tokens. Fees are split between liquidity providers, additionally all LSK fees are shared with the exchange sidechain validators. The fee parts for different actors are given as the constants of the DEX module.
 
-The fees and incentives define the economics of the exchange. They motivate liquidity providers to invest into pools and stimulate traders and validators.
+The fees and incentives define the economics of the exchange. They motivate liquidity providers to invest into pools and stimulate validators.
 
 ## Specification
 
@@ -89,6 +89,8 @@ swappedEventDataSchema = {
     "type": "object",
     "required": [
         "senderAddress",
+        "priceBefore",
+        "priceAfter",
         "tokenIdIn",
         "amountIn",
         "tokenIdOut"
@@ -99,21 +101,31 @@ swappedEventDataSchema = {
             "dataType": "bytes",
             "fieldNumber": 1
         },
+        "priceBefore": {
+            "dataType": "bytes",
+            "maxLength": MAX_NUM_BYTES_Q96,
+            "fieldNumber": 2
+        },
+        "priceAfter": {
+            "dataType": "bytes",
+            "maxLength": MAX_NUM_BYTES_Q96,
+            "fieldNumber": 3
+        },
         "tokenIdIn": {
             "dataType": "bytes",
-            "fieldNumber": 3
+            "fieldNumber": 4
         },
         "amountIn": {
             "dataType": "uint64",
-            "fieldNumber": 2
+            "fieldNumber": 5
         },
         "tokenIdOut": {
             "dataType": "bytes",
-            "fieldNumber": 5
+            "fieldNumber": 6
         },
         "amountOut": {
             "dataType": "uint64",
-            "fieldNumber": 4
+            "fieldNumber": 7
         }
     }
 }
@@ -254,12 +266,15 @@ def execute(trs: Transaction) -> None:
     tokenIdOut = trs.params.tokenIdOut
     tokens = [{id: tokenIdIn, amount: trs.params.amountTokenIn}]
     swapRoute = trs.params.swapRoute
+    try:
+        priceBefore = computeCurrentPrice(tokenIdIn, tokenIdOut, swapRoute)
+    except:
+        raiseSwapException(SWAP_FAILED_INVALID_ROUTE, tokenIdIn,
+                            tokenIdOut, senderAddress)
     fees = []
+
     # swap along all the pools in swapRoute
     for every element poolId in swapRoute:
-        if poolId not in pools:
-            raiseSwapException(SWAP_FAILED_INVALID_ROUTE, tokenIdIn,
-                                tokenIdOut, senderAddress)
 
         currentTokenIn = tokens[-1]
         if getToken0Id(poolId) == currentTokenIn.id:
@@ -268,10 +283,6 @@ def execute(trs: Transaction) -> None:
         else if getToken1Id(poolId) == currentTokenIn.id:
             zeroToOne = False
             IdOut = getToken0Id(poolId)
-        else:
-            # neither of tokens of pool n is an output token of pool n-1
-            raiseSwapException(SWAP_FAILED_INVALID_ROUTE, tokenIdIn,
-                                tokenIdOut, senderAddress)
 
         # if zeroToOne then price decreases after the swap, otherwise it increases
         sqrtLimitPrice = zeroToOne ? MIN_SQRT_RATIO : MAX_SQRT_RATIO
@@ -291,6 +302,7 @@ def execute(trs: Transaction) -> None:
                             tokenIdOut, senderAddress)
 
     else:
+        priceAfter = computeCurrentPrice(tokenIdIn, tokenIdOut, swapRoute)
         # make the corresponding state updates
         # transfer and lock all the tokens involved in the multihop swap  
         transferToPool(senderAddress, swapRoute[0], tokenIdIn, trs.params.amountTokenIn)
@@ -303,12 +315,13 @@ def execute(trs: Transaction) -> None:
         transferFeesFromPool(fees[-1].out, tokenIdOut, swapRoute[-1])
         transferFromPool(swapRoute[-1], senderAddress, tokenIdOut, tokens[-1].amount)
 
-        transferTraderIncentives(fees, tokens, senderAddress)
         emitEvent(
             module = MODULE_NAME_DEX,
             name = EVENT_NAME_SWAPPED,
             data = {
                 "senderAddress": senderAddress,
+                "priceBefore": q96ToBytes(priceBefore),
+                "priceAfter": q96ToBytes(priceAfter),
                 "tokenIdIn": tokenIdIn,
                 "amountIn": trs.params.amountTokenIn,
                 "tokenIdOut": tokenIdOut,
@@ -410,13 +423,15 @@ def execute(trs: Transaction) -> None:
     tokenIdIn = trs.params.tokenIdIn
     tokenIdOut = trs.params.tokenIdOut
     senderAddress = SHA256(trs.senderPublicKey)[:NUM_BYTES_ADDRESS]
+    try:
+        priceBefore = computeCurrentPrice(tokenIdIn, tokenIdOut, trs.params.swapRoute)
+    except:
+        raiseSwapException(SWAP_FAILED_INVALID_ROUTE, tokenIdIn,
+                            tokenIdOut, senderAddress)
 
     # swap along all the pools in inverseSwapRoute
     tokens = {id: tokenIdOut, amount: trs.params.amountTokenOut}
     for every element poolId in inverseSwapRoute:
-        if poolId not in pools:
-            raiseSwapException(SWAP_FAILED_INVALID_ROUTE, tokenIdIn,
-                                tokenIdOut, senderAddress)
         currentTokenOut = tokens[-1]
 
         if getToken1Id(poolId) == currentTokenOut.id:
@@ -425,10 +440,6 @@ def execute(trs: Transaction) -> None:
         else if getToken0Id(poolId) == currentTokenOut.id:
             zeroToOne = False
             IdIn = getToken1Id(poolId)
-        else:
-            # neither of tokens of pool n-1 is an input token of pool n
-            raiseSwapException(SWAP_FAILED_INVALID_ROUTE, tokenIdIn,
-                                tokenIdOut, senderAddress)
 
         # if zeroToOne then price decreases after the swap, otherwise it increases
         sqrtLimitPrice = zeroToOne ? MIN_SQRT_RATIO : MAX_SQRT_RATIO
@@ -449,6 +460,7 @@ def execute(trs: Transaction) -> None:
     else:
         # make the corresponding state updates
         # transfer and lock all the tokens involved in the multihop swap
+        priceAfter = computeCurrentPrice(tokenIdIn, tokenIdOut, trs.params.swapRoute)
         transferFromPool(inverseSwapRoute[0], senderAddress, tokenIdOut, tokens[0].amount)
         transferFeesFromPool(fees[0].out, tokenIdOut, inverseSwapRoute[0])
         for i in range(1, length(inverseSwapRoute)):
@@ -459,12 +471,13 @@ def execute(trs: Transaction) -> None:
         transferFeesFromPool(fees[-1].in, tokenIdIn, inverseSwapRoute[-1])
         transferToPool(senderAddress, inverseSwapRoute[-1], tokenIdIn, tokens[-1].amount)
 
-        traderIncentives = transferTraderIncentives(fees, tokens, senderAddress)
         emitEvent(
             module = MODULE_NAME_DEX,
             name = EVENT_NAME_SWAPPED,
             data = {
                 "senderAddress": senderAddress,
+                "priceBefore": q96ToBytes(priceBefore),
+                "priceAfter": q96ToBytes(priceAfter),
                 "tokenIdIn": tokenIdIn,
                 "amountIn": tokens[-1].amount,
                 "tokenIdOut": tokenIdOut,
@@ -573,6 +586,12 @@ def execute(trs: Transaction) -> None:
     amountTokenIn = trs.params.maxAmountTokenIn
     poolId = trs.params.poolId
     sqrtLimitPrice = bytesToQ96(trs.params.sqrtLimitPrice)
+    try:
+        priceBefore = computeCurrentPrice(tokenIdIn, tokenIdOut, [poolId])
+    except:
+        raiseSwapException(SWAP_FAILED_INVALID_ROUTE, tokenIdIn,
+                            tokenIdOut, senderAddress)
+
 
     if sqrtLimitPrice < MIN_SQRT_RATIO or sqrtLimitPrice > MAX_SQRT_RATIO:
         raiseSwapException(SWAP_FAILED_INVALID_LIMIT_PRICE, tokenIdIn,
@@ -595,6 +614,7 @@ def execute(trs: Transaction) -> None:
         raiseSwapException(SWAP_FAILED_NOT_ENOUGH, tokenIdIn,
                             tokenIdOut, senderAddress)
     else:
+        priceAfter = computeCurrentPrice(tokenIdIn, tokenIdOut, [poolId])
         # make the corresponding state updates
         # transfer and lock all the tokens involved in the multihop swap
         transferToPool(senderAddress, poolId, tokenIdIn, amountIn)
@@ -602,17 +622,13 @@ def execute(trs: Transaction) -> None:
         transferFromPool(poolId, senderAddress, tokenIdOut, amountOut)
         transferFeesFromPool(feesOut, tokenIdOut, poolId)
 
-        transferTraderIncentives(
-            [{in: feesIn, out: feesOut}],
-            [{id: tokenIdIn, amount: amountIn}, {id: tokenIdOut, amount: amountOut}],
-            senderAddress
-        )
-
         emitEvent(
             module = MODULE_NAME_DEX,
             name = EVENT_NAME_SWAPPED,
             data = {
                 "senderAddress": senderAddress,
+                "priceBefore": q96ToBytes(priceBefore),
+                "priceAfter": q96ToBytes(priceAfter),
                 "tokenIdIn": tokenIdIn,
                 "amountIn": amountIn,
                 "tokenIdOut": tokenIdOut,
@@ -682,7 +698,7 @@ def swap(poolId: PoolID,
             raise ExceptionSwapCrossedTooManyTicks() # specific exception class for crossing too many ticks
 
         currentTick = priceToTick(poolSqrtPriceQ96)
-        if zeroToOne and tick(poolId, currentTick) exists and poolSqrtPriceQ96 ==  tickToPrice(currentTick):
+        if zeroToOne and ticks(poolId, currentTick) exists and poolSqrtPriceQ96 ==  tickToPrice(currentTick):
             # need to cross the current tick from right to left
             crossTick(currentTick, False)
             numCrossedTicks += 1
@@ -839,17 +855,17 @@ def crossTick(tickId: TickID, leftToRight: bool) -> None:
     poolId = tickId[:NUM_BYTES_POOL_ID]
     # update liquidity
     if leftToRight:
-        pools(poolId).liquidity += tick(poolId, tickId).liquidityNet
+        pools(poolId).liquidity += ticks(poolId, tickId).liquidityNet
     else:
-        pools(poolId).liquidity -= tick(poolId, tickId).liquidityNet
+        pools(poolId).liquidity -= ticks(poolId, tickId).liquidityNet
 
     # update fee growth outside
     feeGrowthGlobal0Q96 = bytesToQ96(pools(poolId).feeGrowthGlobal0)
-    feeGrowthOutside0Q96 = bytesToQ96(tick(poolId, tickId).feeGrowthOutside0)
-    tick(poolId, tickId).feeGrowthOutside0 = q96ToBytes(sub_96(feeGrowthGlobal0Q96, feeGrowthOutside0Q96))
+    feeGrowthOutside0Q96 = bytesToQ96(ticks(poolId, tickId).feeGrowthOutside0)
+    ticks(poolId, tickId).feeGrowthOutside0 = q96ToBytes(sub_96(feeGrowthGlobal0Q96, feeGrowthOutside0Q96))
     feeGrowthGlobal1Q96 = bytesToQ96(pools(poolId).feeGrowthGlobal1)
-    feeGrowthOutside1Q96 = bytesToQ96(tick(poolId, tickId).feeGrowthOutside1)
-    tick(poolId, tickId).feeGrowthOutside1 = q96ToBytes(sub_96(feeGrowthGlobal1Q96, feeGrowthOutside1Q96))
+    feeGrowthOutside1Q96 = bytesToQ96(ticks(poolId, tickId).feeGrowthOutside1)
+    ticks(poolId, tickId).feeGrowthOutside1 = q96ToBytes(sub_96(feeGrowthGlobal1Q96, feeGrowthOutside1Q96))
 ```
 
 #### transferFeesFromPool
@@ -867,36 +883,8 @@ def transferFeesFromPool(amount: int, id: TokenID, pool: PoolID) -> None:
         transferFromPool(pool, settings.protocolFeeAddress, id, protocolFee)
         Token.lock(settings.protocolFeeAddress, MODULE_NAME_DEX, id, protocolFee)
     if validatorFee > 0:
-        transferFromPool(pool, ADDRESS_VALIDATORS_REWARDS_POOL, id, validatorFee)
-        Token.lock(ADDRESS_VALIDATORS_REWARDS_POOL, MODULE_NAME_DEX, id, validatorFee)
-```
-
-#### transferTraderIncentives
-
-The function computes the amount of trader incentives from the fees payed in LSK using the formula `traderIncentivesBalance/GOAL_BALANCE_TRADER_REWARDS_POOL * lskFeesPaid` and transfers to the given traders account. Here `traderIncentivesBalance` is the balance of the trader incentives pool, constant `GOAL_BALANCE_TRADER_REWARDS_POOL` is defined in the [Introduce DEX module LIP][dexmodulelip] and `lskFeesPaid` is the amount of fees in LSK paid by trader.
-
-##### Parameters
-
-- `fees`: an array of input and output fees for every swap along the swap route.
-- `tokens`: an array of token objects along the swap route, each entry contains the token ID..
-- `address`: the address to which the trader incentives are transferred.
-
-##### Execution
-
-```python
-def transferTraderIncentives(fees: list[object], tokens: list[object], address: Address) -> None:
-    lskFeesPaid = 0
-    for i in range(fees):
-        if tokens[i].id == TOKEN_ID_LSK:
-            lskFeesPaid += fees[i].in
-        if tokens[i+1].id == TOKEN_ID_LSK:
-            lskFeesPaid += fees[i].out
-
-    # total LSK fees are computed as validatorFees / validatorFeePart
-    traderIncentivesBalance = Token.getAvailableBalance(ADDRESS_TRADERS_REWARDS_POOL, TOKEN_ID_REWARDS)
-    rewards = traderIncentivesBalance / GOAL_BALANCE_TRADER_REWARDS_POOL * lskFeesPaid
-    Token.unlock(ADDRESS_TRADERS_REWARDS_POOL, MODULE_NAME_DEX, TOKEN_ID_REWARDS, rewards)
-    Token.transfer(ADDRESS_TRADERS_REWARDS_POOL, address, TOKEN_ID_REWARDS, rewards)
+        transferFromPool(pool, ADDRESS_VALIDATOR_REWARDS_POOL, id, validatorFee)
+        Token.lock(ADDRESS_VALIDATOR_REWARDS_POOL, MODULE_NAME_DEX, id, validatorFee)
 ```
 
 #### raiseSwapException
@@ -918,6 +906,32 @@ def raiseSwapException(reason: int, tokenIn: TokenID, tokenOut: TokenID, senderA
         topics = [senderAddress]
     )
     raise Exception()
+```
+
+#### computeCurrentPrice
+
+For a given pair of input and output tokens and a swap route between these tokens, the function returns the price of the input token in the terms of the output token along the route. E.g. price 4 means that 1 input token is worth 4 output tokens. Function raises an exception if the swap route is invalid.
+
+```python
+def computeCurrentPrice(tokenIn: TokenID, tokenOut: TokenID, swapRoute: list[PoolID]) -> Q96:
+    price = Q96(1)
+    tokenInPool = tokenIn
+    for poolId in swapRoute:
+        if poolId not in pools:
+            raise Exception("Not a valid pool")
+
+        if tokenInPool == getToken0Id(poolId):
+            price = mul_96(price, bytesToQ96(pools(poolId).sqrtPrice))
+            tokenInPool = getToken1Id(poolId)
+        else if tokenInPool == getToken1Id(poolId):
+            price = mul_96(price, inv_96(bytesToQ96(pools(poolId).sqrtPrice)))
+            tokenInPool = getToken0Id(poolId)
+        else:
+            raise Exception("Incorrect swap path for price computation")
+    if tokenInPool != tokenOut:
+        raise Exception("Incorrect swap path for price computation")
+    # convert from sqrt price
+    return mul_96(price, price)
 ```
 
 ## Appendix
