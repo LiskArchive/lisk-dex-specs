@@ -68,10 +68,11 @@ This command is therefore added for convenience in case a liquidity provider wan
 
 ### Constants
 
-The constants used in these specifications are defined in the section [Notation and Constants][lip-define-dex-module] of the "Define DEX module" LIP.       
+Most constants used in these specifications are defined in the section [Notation and Constants][lip-define-dex-module] of the "Define DEX module" LIP. The table below contains only some constants specific to the this LIP.       
 
 | Name                                       | Type     | Value  | Description                                         |
 |--------------------------------------------|----------|--------|-----------------------------------------------------|
+| **Return codes for events**                |        |                  |                            |                            
 | `POOL_CREATION_SUCCESS`                    | `uint32` | 0      | Return code for successful pool creation.           |     
 | `POOL_CREATION_FAILED_INVALID_FEE_TIER`    | `uint32` | 1      | Return code for failed pool creation due to an invalid fee tier in the pool creation. |     
 | `POOL_CREATION_FAILED_ALREADY_EXISTS`      | `uint32` | 2      | Return code for failed pool creation due to an already existing pool. |
@@ -82,15 +83,14 @@ The constants used in these specifications are defined in the section [Notation 
 | `POSITION_UPDATE_FAILED_NOT_EXISTS`        | `uint32` | 1      | Return code for failed position update as position does not exist. |
 | `POSITION_UPDATE_FAILED_NOT_OWNER`         | `uint32` | 2      | Return code for failed position update as position owner is different from transaction sender. |
 | `POSITION_UPDATE_FAILED_INSUFFICIENT_LIQUIDITY` | `uint32` | 3      | Return code for failed position update as transaction sender is not position owner. |
-| `TOKEN_ID_LSK`                    | `bytes` |  0x 00 00 00 01 00 00 00 00   | The token ID of the LSK token.           |     
-| `TOKEN_ID_REWARDS`                    | `bytes` |  TBD   | The token ID of the token used for liquidity provider incentives.           |     
+
 
 ### Events
 
 #### AmountBelowMin
 
 This event is emitted whenever the computed amount added to a position is below the required minimum which makes a command fail.
-The type ID of the event is `TYPE_ID_AMOUNT_BELOW_MIN`.
+The name of the event is `EVENT_NAME_AMOUNT_BELOW_MIN`.
 
 ##### Topics
 
@@ -146,7 +146,7 @@ amountBelowMinEventDataSchema = {
 #### FeesIncentivesCollected
 
 This event is emitted whenever fees and incentives are collected by a position owner.
-The type ID of the event is `TYPE_ID_FEES_INCENTIVES_COLLECTED`.
+The name of the event is `EVENT_NAME_FEES_INCENTIVES_COLLECTED`.
 
 ##### Topics
 
@@ -210,7 +210,7 @@ feesIncentivesCollectedEventDataSchema = {
 #### PoolCreated
 
 This event is emitted whenever a pool is successfully created.
-The type ID of the event is `TYPE_ID_POOL_CREATED`.
+The name of the event is `EVENT_NAME_POOL_CREATED`.
 
 ##### Topics
 
@@ -252,7 +252,7 @@ poolCreatedEventDataSchema = {
 #### PoolCreationFailed
 
 This event is emitted whenever the pool creation fails and it provides information about the failure reason.
-The type ID of the event is `TYPE_ID_POOL_CREATION_FAILED`.
+The name of the event is `EVENT_NAME_POOL_CREATION_FAILED`.
 
 ##### Topics
 
@@ -295,7 +295,7 @@ Note that `result` is an integer in `{POOL_CREATION_FAILED_INVALID_FEE_TIER, POO
 #### PositionCreated
 
 This event is emitted whenever a position is successfully created.
-The type ID of the event is `TYPE_ID_POSITION_CREATED`.
+The name of the event is `EVENT_NAME_POSITION_CREATED`.
 
 ##### Topics
 
@@ -358,7 +358,7 @@ positionCreatedEventDataSchema = {
 #### PositionCreationFailed
 
 This event is emitted whenever the position creation fails and it provides information about the failure reason.
-The type ID of the event is `TYPE_ID_POSITION_CREATION_FAILED`.
+The name of the event is `EVENT_NAME_POSITION_CREATION_FAILED`.
 
 ##### Topics
 
@@ -400,7 +400,7 @@ Note that `result` is an integer in `{POSITION_CREATION_FAILED_NO_POOL, POSITION
 #### PositionUpdated
 
 This event is emitted whenever a position is updated by adding or removing liquidity.
-The type ID of the event is `TYPE_ID_POSITION_UDPATED`.
+The name of the event is `EVENT_NAME_POSITION_UDPATED`.
 
 ##### Topics
 
@@ -445,7 +445,7 @@ positionUpdatedEventDataSchema = {
 #### PositionUpdateFailed
 
 This event is emitted whenever an update of a position fails.
-The type ID of the event is `TYPE_ID_POSITION_UDPATE_FAILED`.
+The name of the event is `EVENT_NAME_POSITION_UDPATE_FAILED`.
 
 ##### Topics
 
@@ -474,6 +474,9 @@ positionUpdateFailedEventDataSchema = {
     }
 }
 ```
+
+Note that `result` is an integer in `{POSITION_UPDATE_FAILED_NOT_EXISTS, POSITION_UPDATE_FAILED_NOT_OWNER, POSITION_UPDATE_FAILED_INSUFFICIENT_LIQUIDITY}`.
+
 
 ### Commands
 
@@ -595,7 +598,7 @@ def execute(trs: Transaction) -> None:
         # the pool creation failed and an event indicating the failure reason is emitted
         emitPersistentEvent((
             moduleID = MODULE_ID_DEX,
-            typeID = TYPE_ID_POOL_CREATION_FAILED,
+            typeID = EVENT_NAME_POOL_CREATION_FAILED,
             data = {
                 "senderAddress": senderAddress,
                 "tokenID0": tokenID0,
@@ -611,7 +614,7 @@ def execute(trs: Transaction) -> None:
     # emit event about successful pool creation
     emitEvent(
         moduleID = MODULE_ID_DEX,
-        typeID = TYPE_ID_POOL_CREATED,
+        typeID = EVENT_NAME_POOL_CREATED,
         data = {
             "senderAddress": senderAddress,
             "poolID": poolID,
@@ -631,7 +634,7 @@ def execute(trs: Transaction) -> None:
     if result != POSITION_CREATION_SUCCESS:
         emitPersistentEvent(
             moduleID = MODULE_ID_DEX,
-            typeID = TYPE_ID_POSITION_CREATION_FAILED,
+            typeID = EVENT_NAME_POSITION_CREATION_FAILED,
             data = {
                 "senderAddres": senderAddress,
                 "poolID": poolID,
@@ -658,7 +661,7 @@ def execute(trs: Transaction) -> None:
         # emit event explaining why the command execution failed
         emitPersistentEvent(
             moduleID = MODULE_ID_DEX,
-            typeID = TYPE_ID_AMOUNT_BELOW_MIN,
+            typeID = EVENT_NAME_AMOUNT_BELOW_MIN,
             data = {
                 "senderAddress": senderAddress,
                 "amount0": amount0,
@@ -677,12 +680,12 @@ def execute(trs: Transaction) -> None:
         raise Exception()
 
     # deduct pool creation fee
-    transferToProtocolFeeAccount(senderAddress, TOKEN_ID_FEE_DEX, POOL_CREATION_FEE)
+    transferToValidatorLSKPool(senderAddress, TOKEN_ID_FEE_DEX, POOL_CREATION_FEE)
 
     # emit event about the successful position creation detailing the exact amounts added to the position
     emitEvent(
         moduleID = MODULE_ID_DEX,
-        typeID = TYPE_ID_POSITION_CREATED,
+        typeID = EVENT_NAME_POSITION_CREATED,
         data = {
             "senderAddress": senderAddress,
             "positionID": positionID,
@@ -793,7 +796,7 @@ def execute(trs: Transaction) -> None:
     if result != POSITION_CREATION_SUCCESS:
         emitPersistentEvent(
             moduleID = MODULE_ID_DEX,
-            typeID = TYPE_ID_POSITION_CREATION_FAILED,
+            typeID = EVENT_NAME_POSITION_CREATION_FAILED,
             data = {
                 "senderAddress": senderAddress,
                 "poolID": trs.params.poolID,
@@ -806,7 +809,7 @@ def execute(trs: Transaction) -> None:
         raise Exception()
 
     # add liquidity to position                                
-    currentSqrtPrice = pools(trs.params.poolID).sqrtPrice
+    currentSqrtPrice = pools[trs.params.poolID].sqrtPrice
     tickLowerSqrtPrice = tickToPrice(trs.params.tickLower)
     tickUpperSqrtPrice = tickToPrice(trs.params.tickUpper)
     liquidity = getLiquidityForAmounts(currentSqrtPrice,
@@ -821,7 +824,7 @@ def execute(trs: Transaction) -> None:
         # emit event explaining why the command execution failed
         emitPersistentEvent(
             moduleID = MODULE_ID_DEX,
-            typeID = TYPE_ID_AMOUNT_BELOW_MIN,
+            typeID = EVENT_NAME_AMOUNT_BELOW_MIN,
             data = {
                 "senderAddress": senderAddress,
                 "amount0": amount0,
@@ -840,12 +843,12 @@ def execute(trs: Transaction) -> None:
         raise Exception()
 
     # deduct position creation fee
-    transferToProtocolFeeAccount(senderAddress, TOKEN_ID_FEE_DEX, POSITION_CREATION_FEE)
+    transferToValidatorLSKPool(senderAddress, TOKEN_ID_FEE_DEX, POSITION_CREATION_FEE)
 
     # emit event about the successful position creation detailing the exact amounts added to the position
     emitEvent(
         moduleID = MODULE_ID_DEX,
-        typeID = TYPE_ID_POSITION_CREATED,
+        typeID = EVENT_NAME_POSITION_CREATED,
         data = {
             "senderAddress": senderAddress,
             "positionID": positionID,
@@ -940,8 +943,8 @@ def execute(trs: Transaction) -> None:
 
     # note that if a position exists, then a corresponding pool must exist
     poolID = getPoolIDFromPositionID(trs.params.positionID)
-    currentSqrtPrice = pools(poolID).sqrtPrice
-    positionInfo = positions(positionID)
+    currentSqrtPrice = pools[poolID].sqrtPrice
+    positionInfo = positions[positionID]
     tickLowerSqrtPrice = tickToPrice(positionInfo.tickLower)
     tickUpperSqrtPrice = tickToPrice(positionInfo.tickUpper)
     senderAddress = address derived from trs.senderPublicKey
@@ -961,7 +964,7 @@ def execute(trs: Transaction) -> None:
         # emit event explaining why the command execution failed
         emitPersistentEvent(
             moduleID = MODULE_ID_DEX,
-            typeID = TYPE_ID_AMOUNT_BELOW_MIN,
+            typeID = EVENT_NAME_AMOUNT_BELOW_MIN,
             data = {
                 "senderAddress": senderAddress,
                 "amount0": amount0,
@@ -982,7 +985,7 @@ def execute(trs: Transaction) -> None:
     # emit event detailing the exact amounts added to the position
     emitEvent(
         moduleID = MODULE_ID_DEX,
-        typeID = TYPE_ID_POSITION_UDPATED,
+        typeID = EVENT_NAME_POSITION_UDPATED,
         data = {
             "senderAddres": senderAddress,
             "positionID": positionID,
@@ -1072,7 +1075,7 @@ def execute(trs: Transaction) -> None:
         # emit event explaining why the command execution failed
         emitPersistentEvent(
             moduleID = MODULE_ID_DEX,
-            typeID = TYPE_ID_AMOUNT_BELOW_MIN,
+            typeID = EVENT_NAME_AMOUNT_BELOW_MIN,
             data = {
                 "senderAddress": senderAddress,
                 "amount0": amount0,
@@ -1089,7 +1092,7 @@ def execute(trs: Transaction) -> None:
     # emit event detailing the exact amounts added to the position
     emitEvent(
         moduleID = MODULE_ID_DEX,
-        typeID = TYPE_ID_POSITION_UDPATED,
+        typeID = EVENT_NAME_POSITION_UDPATED,
         data = {
             "senderAddres": senderAddress,
             "positionID": positionID,
@@ -1170,7 +1173,7 @@ checkPositionExistenceAndOwnership(senderAddres: Address, positionID: PositionID
     if trs.params.positionID does not exist in Positions substore:
         emitPersistentEvent(
             moduleID = MODULE_ID_DEX,
-            typeID = TYPE_ID_POSITION_UDPATE_FAILED,
+            typeID = EVENT_NAME_POSITION_UDPATE_FAILED,
             data = {
                 "senderAddress": senderAddress,
                 "positionID": positionID,
@@ -1185,7 +1188,7 @@ checkPositionExistenceAndOwnership(senderAddres: Address, positionID: PositionID
     if senderAddress != getOwnerAddressOfPosition(positionID):
         emitPersistentEvent(
             moduleID = MODULE_ID_DEX,
-            typeID = TYPE_ID_POSITION_UDPATE_FAILED,
+            typeID = EVENT_NAME_POSITION_UDPATE_FAILED,
             data = {
                 "senderAddress": senderAddress,
                 "positionID": positionID,
@@ -1231,7 +1234,7 @@ def collectFeesAndIncentives(positionID: PositionID) -> None:
     # emit an event providing information about the collected fees and incentives
     emitEvent(
         moduleID = MODULE_ID_DEX,
-        typeID = TYPE_ID_FEES_INCENTIVES_COLLECTED,
+        typeID = EVENT_NAME_FEES_INCENTIVES_COLLECTED,
         data = {
             "senderAddress": senderAddress,
             "positionID": positionID,
@@ -1373,7 +1376,7 @@ def createPool(tokenID0: TokenID, tokenID1: TokenID, feeTier: uint32, initialSqr
         "protocolFees1": Q96(0),
         "tickSpacing": poolSetting.tickSpacing
     }
-    pools(poolID) = encode(poolsSchema, poolStoreValue)
+    pools[poolID] = encode(poolsSchema, poolStoreValue)
     return POOL_CREATION_SUCCESS
 ```
 
@@ -1403,7 +1406,7 @@ def createPosition(senderAddress: Address, poolID: PoolID, tickLower: uint32, ti
     # check that the corresponding pool is initialized
     if not poolID in Pools Substore:
         return (POSITION_CREATION_FAILED_NO_POOL, b'')
-    currentPool = pools(poolID)
+    currentPool = pools[poolID]
 
     # Check that tickLower < tickUpper and ticks are within global bounds.
     # Currently this is redundant as it is already guaranteed by commands defined in this LIP,
@@ -1417,7 +1420,7 @@ def createPosition(senderAddress: Address, poolID: PoolID, tickLower: uint32, ti
         return (POSITION_CREATION_FAILED_INVALID_TICK_SPACING, b'')
 
     # check if the lower price tick entry exist and update/create it
-    if tick(poolID, tickLower) does not exist:
+    if ticks(poolID, tickLower) does not exist:
         tickStoreValue = {
            "liquidityNet": 0,
            "liquidityGross": 0,
@@ -1428,10 +1431,10 @@ def createPosition(senderAddress: Address, poolID: PoolID, tickLower: uint32, ti
             tickStoreValue.feeGrowthOutside0 = currentPool.feeGrowthGlobal0
             tickStoreValue.feeGrowthOutside1 = currentPool.feeGrowthGlobal1
 
-        tick(poolID, tickLower) = encode(priceTickSchema, tickStoreValue)
+        ticks(poolID, tickLower) = encode(priceTickSchema, tickStoreValue)
 
     # check if the upper price tick entry exist and update/create it
-    if tick(poolID, tickUpper) does not exist:
+    if ticks(poolID, tickUpper) does not exist:
         tickStoreValue = {
             "liquidityNet": 0,
             "liquidityGross": 0,
@@ -1442,7 +1445,7 @@ def createPosition(senderAddress: Address, poolID: PoolID, tickLower: uint32, ti
             tickStoreValue.feeGrowthOutside0 = currentPool.feeGrowthGlobal0
             tickStoreValue.feeGrowthOutside1 = currentPool.feeGrowthGlobal1
 
-        tick(poolID, tickUpper) = encode(priceTickSchema, tickStoreValue)
+        ticks(poolID, tickUpper) = encode(priceTickSchema, tickStoreValue)
 
     positionID = getNewPositionID(poolID, senderAddress)  
 
@@ -1454,7 +1457,7 @@ def createPosition(senderAddress: Address, poolID: PoolID, tickLower: uint32, ti
         "feeGrowthInsideLast1": Q96(0),
         "ownerAddress": senderAddress
     }
-    positions(positionID) = encode(positionSchema, positionValue)
+    positions[positionID] = encode(positionSchema, positionValue)
     return (POSITION_CREATION_SUCCESS, positionID)
 ```
 
@@ -1476,15 +1479,15 @@ This function allows to compute the fee growth inside a position and corresponds
 
 ```python
 def getFeeGrowthInside(positionID: PositionID) -> Tuple[Q96, Q96]:
-    positionInfo = positions(positionID)
+    positionInfo = positions[positionID]
     poolID = getPoolIDFromPositionID(positionID)
-    poolInfo = pools(poolID)
+    poolInfo = pools[poolID]
 
     tickLower = positionInfo.tickLower
     tickUpper = positionInfo.tickUpper
     tickCurrent = priceToTick(poolInfo.sqrtPrice)
-    lowerTickInfo = tick(poolID, tickLower)
-    upperTickInfo = tick(poolID, tickUpper)
+    lowerTickInfo = ticks(poolID, tickLower)
+    upperTickInfo = ticks(poolID, tickUpper)
 
     # compute the fee growth below
     if tickCurrent >= tickLower:
@@ -1592,16 +1595,6 @@ getOwnerAddressOfPosition(positionID: PositionID) -> Address:
 ```
 
 
-#### getPoolIDFromPositionID
-
-This helper function computes the pool ID from a given position ID.
-
-```python
-getPoolIDFromPositionID(positionID: PositionID) -> PoolID:
-    return positionID[:NUM_BYTES_POOL_ID]
-```
-
-
 #### updatePosition
 
 This function updates or deletes an existing entry in the positions substore.
@@ -1626,14 +1619,14 @@ Analogously, `amount1` is the amount of `token1` added or removed from the posit
 ```python
 def updatePosition(positionID: PositionID, liquidityDelta: int64) -> Tuple[uint64, uint64]:
     # check validity of input parameters
-    positionInfo = positions(positionID)
+    positionInfo = positions[positionID]
     if -liquidityDelta > positionInfo.liquidity:
         # this can only occur if the removed liquidity is larger than the liquidity of the position
         ownerAddress = getOwnerAddressOfPosition(positionID)
 
         emitPersistentEvent(
             moduleID = MODULE_ID_DEX,
-            typeID = TYPE_ID_POSITION_UDPATE_FAILED,
+            typeID = EVENT_NAME_POSITION_UDPATE_FAILED,
             data = {
                 "senderAddress": senderAddress,
                 "positionID": positionID,
@@ -1654,9 +1647,9 @@ def updatePosition(positionID: PositionID, liquidityDelta: int64) -> Tuple[uint6
 
     # calculate output amounts
     poolID = getPoolIDFromPositionID(positionID)
-    poolInfo = pools(poolID)
-    lowerTickInfo = tick(poolID, positionInfo.tickLower)
-    upperTickInfo = tick(poolID, positionInfo.tickUpper)
+    poolInfo = pools[poolID]
+    lowerTickInfo = ticks(poolID, positionInfo.tickLower)
+    upperTickInfo = ticks(poolID, positionInfo.tickUpper)
     sqrtPriceLow = tickToPrice(positionInfo.tickLower)
     sqrtPriceUp = tickToPrice(positionInfo.tickUpper)
 
@@ -1686,14 +1679,14 @@ def updatePosition(positionID: PositionID, liquidityDelta: int64) -> Tuple[uint6
     # update the pool entry if sqrtPrice is in the price range
     if sqrtPriceLow <= poolInfo.sqrtPrice and poolInfo.sqrtPrice < sqrtPriceUp:
         poolInfo.liquidity += liquidityDelta
-        pools(poolID) = poolInfo
+        pools[poolID] = poolInfo
 
     # update position liquidity
     positionInfo.liquidity += liquidityDelta
     if positionInfo.liquidity == 0:
-        delete entry positions(positionID)
+        delete entry positions[positionID]
     else:
-        positions(positionID) = positionInfo
+        positions[positionID] = positionInfo
 
     # update price ticks
     lowerTickInfo.liquidityNet += liquidityDelta
@@ -1702,14 +1695,14 @@ def updatePosition(positionID: PositionID, liquidityDelta: int64) -> Tuple[uint6
     upperTickInfo.liquidityGross += liquidityDelta
 
     if lowerTickInfo.liquidityGross == 0:
-        delete entry tick(poolID,  positionInfo.tickLower)
+        delete entry ticks(poolID,  positionInfo.tickLower)
     else:
-        tick(poolID, positionInfo.tickLower) = lowerTickInfo
+        ticks(poolID, positionInfo.tickLower) = lowerTickInfo
 
     if upperTickInfo.liquidityGross == 0:
-        delete entry tick(poolID,  positionInfo.tickUpper)
+        delete entry ticks(poolID,  positionInfo.tickUpper)
     else:
-        tick(poolID, positionInfo.tickUpper) = upperTickInfo
+        ticks(poolID, positionInfo.tickUpper) = upperTickInfo
 
     return (amount0, amount1)
 ```
@@ -1757,13 +1750,6 @@ This LIP, together with the ["Introduce DEX Module" LIP][lip-define-dex-module] 
 
 TBD
 
-## Appendix
-
-### User Flow for Commands
-
-This section contains recommendation of how the parameters for the different commands defined in this LIP can be prepared. In particular, we describe which command parameters should be requested from the user and how the other parameters can be computed.
-
-TODO  
 
 [lip-0027]: https://github.com/LiskHQ/lips/blob/main/proposals/lip-0027.md
 [lip-0051]: https://github.com/LiskHQ/lips/blob/main/proposals/lip-0051.md
