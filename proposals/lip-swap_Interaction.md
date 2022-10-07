@@ -274,7 +274,7 @@ def execute(trs: Transaction) -> None:
     fees = []
 
     # swap along all the pools in swapRoute
-    for every element poolId in swapRoute:
+    for poolId in swapRoute:
 
         currentTokenIn = tokens[-1]
         if getToken0Id(poolId) == currentTokenIn.id:
@@ -431,7 +431,7 @@ def execute(trs: Transaction) -> None:
 
     # swap along all the pools in inverseSwapRoute
     tokens = {id: tokenIdOut, amount: trs.params.amountTokenOut}
-    for every element poolId in inverseSwapRoute:
+    for poolId in inverseSwapRoute:
         currentTokenOut = tokens[-1]
 
         if getToken1Id(poolId) == currentTokenOut.id:
@@ -676,7 +676,7 @@ def swap(poolId: PoolID,
     ) -> tuple[uint64, uint64, uint64, uint64]:
 
     feeTier = getFeeTier(poolId)
-    poolSqrtPriceQ96 = bytesToQ96(pools(poolId).sqrtPrice)
+    poolSqrtPriceQ96 = bytesToQ96(pools[poolId].sqrtPrice)
 
     # check if the current price is not already beyond the limit price
     # if zeroToOne then price decreases after the swap, otherwise it increases
@@ -721,7 +721,7 @@ def swap(poolId: PoolID,
         amountRemainingTemp = amountRemaining - firstFee
 
         # compute the swap within price tick or price limit reached
-        (poolSqrtPriceQ96, amountIn, amountOut) = swapWithin(poolSqrtPriceQ96, sqrtTargetPrice, pools(poolId).liquidity, amountRemainingTemp, exactInput)
+        (poolSqrtPriceQ96, amountIn, amountOut) = swapWithin(poolSqrtPriceQ96, sqrtTargetPrice, pools[poolId].liquidity, amountRemainingTemp, exactInput)
 
         # feeIn is feeTier/FEE_TIER_PARTITION fraction of the feeIn + amountIn
         feeCoeff = div_96(Q96(feeTier/2), Q96(FEE_TIER_PARTITION - feeTier/2))
@@ -753,12 +753,12 @@ def swap(poolId: PoolID,
         # update liquidity provider fees
         liquidityFee0 = zeroToOne ? liquidityFeeIn : liquidityFeeOut
         liquidityFee1 = zeroToOne ? liquidityFeeOut : liquidityFeeIn
-        globalFeesQ96_0 = div_96(Q96(liquidityFee0), Q96(pools(poolId).liquidity))
-        globalFeesQ96_1 = div_96(Q96(liquidityFee1), Q96(pools(poolId).liquidity))
-        feeGrowthGlobal0Q96_0 = bytesToQ96(pools(poolId).feeGrowthGlobal0)
-        pools(poolId).feeGrowthGlobal0 = q96ToBytes(add_96(feeGrowthGlobal0Q96_0, globalFeesQ96_0))
-        feeGrowthGlobal1Q96_1 = bytesToQ96(pools(poolId).feeGrowthGlobal1)
-        pools(poolId).feeGrowthGlobal1 = q96ToBytes(add_96(feeGrowthGlobal1Q96_1, globalFeesQ96_1))
+        globalFeesQ96_0 = div_96(Q96(liquidityFee0), Q96(pools[poolId].liquidity))
+        globalFeesQ96_1 = div_96(Q96(liquidityFee1), Q96(pools[poolId].liquidity))
+        feeGrowthGlobal0Q96_0 = bytesToQ96(pools[poolId].feeGrowthGlobal0)
+        pools[poolId].feeGrowthGlobal0 = q96ToBytes(add_96(feeGrowthGlobal0Q96_0, globalFeesQ96_0))
+        feeGrowthGlobal1Q96_1 = bytesToQ96(pools[poolId].feeGrowthGlobal1)
+        pools[poolId].feeGrowthGlobal1 = q96ToBytes(add_96(feeGrowthGlobal1Q96_1, globalFeesQ96_1))
 
         # if sqrtNextTickPriceQ96 was reached by increasing the price,
         # cross the next tick from left to right
@@ -767,7 +767,7 @@ def swap(poolId: PoolID,
             numCrossedTicks += 1
 
     # update the pool's state with the correct sqrtPrice
-    pools(poolId).sqrtPrice = q96ToBytes(poolSqrtPriceQ96)
+    pools[poolId].sqrtPrice = q96ToBytes(poolSqrtPriceQ96)
 
     return (amountTotalIn, amountTotalOut, totalFeesIn, totalFeesOut)
 ```
@@ -855,15 +855,15 @@ def crossTick(tickId: TickID, leftToRight: bool) -> None:
     poolId = tickId[:NUM_BYTES_POOL_ID]
     # update liquidity
     if leftToRight:
-        pools(poolId).liquidity += ticks(poolId, tickId).liquidityNet
+        pools[poolId].liquidity += ticks(poolId, tickId).liquidityNet
     else:
-        pools(poolId).liquidity -= ticks(poolId, tickId).liquidityNet
+        pools[poolId].liquidity -= ticks(poolId, tickId).liquidityNet
 
     # update fee growth outside
-    feeGrowthGlobal0Q96 = bytesToQ96(pools(poolId).feeGrowthGlobal0)
+    feeGrowthGlobal0Q96 = bytesToQ96(pools[poolId].feeGrowthGlobal0)
     feeGrowthOutside0Q96 = bytesToQ96(ticks(poolId, tickId).feeGrowthOutside0)
     ticks(poolId, tickId).feeGrowthOutside0 = q96ToBytes(sub_96(feeGrowthGlobal0Q96, feeGrowthOutside0Q96))
-    feeGrowthGlobal1Q96 = bytesToQ96(pools(poolId).feeGrowthGlobal1)
+    feeGrowthGlobal1Q96 = bytesToQ96(pools[poolId].feeGrowthGlobal1)
     feeGrowthOutside1Q96 = bytesToQ96(ticks(poolId, tickId).feeGrowthOutside1)
     ticks(poolId, tickId).feeGrowthOutside1 = q96ToBytes(sub_96(feeGrowthGlobal1Q96, feeGrowthOutside1Q96))
 ```
@@ -921,10 +921,10 @@ def computeCurrentPrice(tokenIn: TokenID, tokenOut: TokenID, swapRoute: list[Poo
             raise Exception("Not a valid pool")
 
         if tokenInPool == getToken0Id(poolId):
-            price = mul_96(price, bytesToQ96(pools(poolId).sqrtPrice))
+            price = mul_96(price, bytesToQ96(pools[poolId].sqrtPrice))
             tokenInPool = getToken1Id(poolId)
         else if tokenInPool == getToken1Id(poolId):
-            price = mul_96(price, inv_96(bytesToQ96(pools(poolId).sqrtPrice)))
+            price = mul_96(price, inv_96(bytesToQ96(pools[poolId].sqrtPrice)))
             tokenInPool = getToken0Id(poolId)
         else:
             raise Exception("Incorrect swap path for price computation")
@@ -1044,7 +1044,7 @@ def computeExceptionalRoute(tokenIn: TokenID, tokenOut: TokenID, poolsGraph: Poo
     return []
 ```
 
-Function `getOptimalSwapPool` finds a pool to swap given amount of tokens with the best value for user. If there is no direct pool then an exception is thrown. The function dry runs swap transactions and is thus computationally intense.
+Function `getOptimalSwapPool` finds a pool to swap given amount of tokens with the best value for user. If there is no direct pool then an exception is thrown. The function dry runs swap transactions and is thus computationally intense. The functions `dryRunSwapExactIn` and `dryRunSwapExactOut` are endpoints for off-chain services defined in the [Introduce DEX module LIP][dexmodulelip].
 
 ```python
 def getOptimalSwapPool(tokenIn: TokenID, tokenOut: TokenID, amount: int,
@@ -1062,29 +1062,17 @@ def getOptimalSwapPool(tokenIn: TokenID, tokenOut: TokenID, amount: int,
     computedAmounts = []
     for pool in candidatePools:
         if exactIn:
-            dry run swap with exact input command with: {
-                "tokenIdIn": tokenIn,
-                "amountTokenIn": amount,
-                "tokenIdOut": tokenOut,
-                "minAmountTokenOut": 0,
-                "swapRoute": [pool],
-                "maxTimestampValid": MAX_UINT_32
-            }
-            # we assume that transaction succeeded
-            let amountOut be the value of "amountOut" field in the Swapped event
-            computedAmounts.add(amountOut)
+            try:
+                amountOut = dryRunSwapExactIn(tokenIn, amount, tokenOut, 0, [pool])[1]
+                computedAmounts.add(amountOut)
+            except:
+                pass
         else:
-            dry run swap with exact output command with: {
-                "tokenIdIn": tokenIn,
-                "maxAmountTokenIn": MAX_UINT_64,
-                "tokenIdOut": tokenOut,
-                "amountTokenOut": amount,
-                "swapRoute": [pool],
-                "maxTimestampValid": MAX_UINT_32
-            }
-            # we assume that transaction succeeded
-            let amountIn be the value of "amountIn" field in the Swapped event
-            computedAmounts.add(amountIn)
+            try:
+                amountIn = dryRunSwapExactOut(tokenIn, MAX_UINT_64, tokenOut, amount, [pool])[0]
+                computedAmounts.add(amountIn)
+            except:
+                pass
     if exactIn:
         let i be the index of a maximal element in computedAmounts
     else:
@@ -1143,7 +1131,7 @@ def getRoute(tokenIn: TokenID, tokenOut: TokenID, poolsGraph: PoolsGraph, amount
         for setting in settings.poolCreationSettings:
             # all possible pools to swap tokenIn and tokenOut
             candidatePools.add(token0 + token1 + setting.feeTier.to_bytes(4, byteorder='big'))
-        let bestPool be pool in candidatePools with maximal pools(pool).liquidity
+        let bestPool be pool in candidatePools with maximal pools[pool].liquidity
         bestRoute.add(bestPool)
         poolTokenIn = poolTokenOut
     return bestRoute
