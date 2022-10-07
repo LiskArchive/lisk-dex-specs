@@ -3,7 +3,7 @@ LIP: <LIP number>
 Title:  Introduce DEX module
 Author: Iker Alustiza <iker@lightcurve.io>
         Jan Hackfeld <jan.hackfeld@lightcurve.io>
-	       Sergey Shemyakov <sergey.shemyakov@lightcurve.io>
+        Sergey Shemyakov <sergey.shemyakov@lightcurve.io>
 Type: Standards Track
 Created: <YYYY-MM-DD>
 Updated: <YYYY-MM-DD>
@@ -101,9 +101,6 @@ We define the following constants:
 | **General Constants**                |        |                  |                            |                            
 | `NUM_BYTES_ADDRESS`                | `uint32` | 20                     | The number of bytes of an address.  |     
 | `MAX_NUM_BYTES_Q96`                    | `uint32` | 24                    | The maximal number of bytes of a serialized fractional number in Q96 format. |
-| `ADDRESS_LIQUIDITY_PROVIDER_REWARDS_POOL`                    | bytes |  `SHA256(b"liquidityProviderRewardsPool")[:NUM_BYTES_ADDRESS]`  | The address of the liquidity provider rewards pool.  |
-| `ADDRESS_TRADER_REWARDS_POOL`                    | bytes |  `SHA256(b"traderRewardsPool")[:NUM_BYTES_ADDRESS]`  | The address of the trader rewards pool.  |
-| `ADDRESS_VALIDATOR_REWARDS_POOL`                    | bytes |  `SHA256(b"validatorRewardsPool")[:20]`  | The address of the validator rewards pool.  |
 | `MAX_UINT_32`                            |    `uint32`    | 4294967295 | Maximal value of a `uint32` number   |
 | `MAX_UINT_64`         |       `uint64`    | 18446744073709551615      |   Maximal value of a `uint64` number  |
 | **DEX Module Constants**                |        |                  |                            |                            
@@ -114,14 +111,18 @@ We define the following constants:
 | `MAX_NUMBER_CROSSED_TICKS`                | `uint32` | TBA                     | Maximum number of price ticks to be crossed by a single swap.  |
 | `MAX_HOPS_SWAP`                | `uint32` | TBA                     | Maximum number of different pools that a complete swap can interact with.  |   
 | `MAX_NUM_POSITIONS_FEE_COLLECTION`  | `uint32` | TBD            | The maximum number of positions for which it is possible to collect fees in one transaction.                                 |
-| `TOKEN_ID_FEE_DEX`        | bytes | TBD    | The ID of the token used for fees. This defines the type of token in which the additional fees for pool creation and position creation are paid.         |
-| `TOKEN_ID_REWARDS`        | bytes | TBD    | The token ID of the token used for liquidity provider, trader and validator incentives.         |
 | `POOL_CREATION_FEE`       | `uint64` | TBD    | This amount of tokens is transferred to the protocol fee account when creating a new pool.|
 | `POSITION_CREATION_FEE`   | `uint64` | TBD    | This amount of tokens is transferred to the protocol fee account when creating a new position.|       
-| `TARGET_BALANCE_TRADER_REWARDS_POOL`    | `uint64`  | TBD       |      The goal balance of the trader rewards pool, is used to compute trader incentives.      |                   
+| **DEX Rewards Module Constants**                |        |                  |                            |                            
+| `ADDRESS_LIQUIDITY_PROVIDER_REWARDS_POOL`                    | bytes |  `SHA256(b"liquidityProviderRewardsPool")[:NUM_BYTES_ADDRESS]`  | The address of the liquidity provider rewards pool.  |
+| `ADDRESS_TRADER_REWARDS_POOL`                    | bytes |  `SHA256(b"traderRewardsPool")[:NUM_BYTES_ADDRESS]`  | The address of the trader rewards pool.  |
+| `ADDRESS_VALIDATOR_REWARDS_POOL`                    | bytes |  `SHA256(b"validatorRewardsPool")[:20]`  | The address of the validator rewards pool.  |
+| `TOKEN_ID_REWARDS`        | bytes | TBD    | The token ID of the token used for liquidity provider, trader and validator incentives, as defined in the [DEX Rewards module](https://github.com/LiskHQ/lips-staging/blob/main/proposals/lip_introduce_DEX_Rewards_module.md).         |
 | **Token Module Constants**                |        |                  |                           |                            
-| `CHAIN_ID_ALIAS_NATIVE`              |  bytes |   0x0000           |    `chainID` value of a native token.     |      
-| `NUM_BYTES_TOKEN_ID`                | `uint32` | 8                     | The number of bytes of a token ID.  |                      
+| `TOKEN_ID_LSK`              |  bytes |   `0x 00 00 00 00 00 00 00 00`           |    The token ID of the LSK token as defined in the [Token module LIP][tokenLIP].     |      
+| `NUM_BYTES_TOKEN_ID`                | `uint32` | 8                     | The number of bytes of a token ID.  |         
+| **Fee Module Constants**                |        |                  |                           |                            
+| `TOKEN_ID_FEE_DEX`        | bytes | TBD    | The ID of the token used for fees, as defined in the [Fee module LIP](https://github.com/LiskHQ/lips/blob/main/proposals/lip-0048.md). This defines the type of token in which the additional fees for pool creation and position creation are paid.         |
 | **DEX Module Store**                    |        |                  | |                                                       |
 | `SUBSTORE_PREFIX_STATE`                    | bytes  | 0x0000           | Substore prefix of the DEX global state substore. |                                                       |
 | `SUBSTORE_PREFIX_POOL`                    | bytes  | 0x4000           | Substore prefix of the pools substore. |
@@ -146,7 +147,7 @@ We define the following constants:
 | `EVENT_NAME_POSITION_CREATION_FAILED`                 | string |   "positionCreationFailed"   | Event name ID of the `PositionCreationFailed` event. |
 | `EVENT_NAME_POSITION_UDPATED`                 | string |  "positionUpdated"  | Event name ID of the `PositionUpdated` event. |
 | `EVENT_NAME_POSITION_UDPATE_FAILED`                 | string |   "positionUpdateFailed"   | Event name of the `PositionUpdateFailed` event. |
-| `EVENT_NAME_SWAPED`                 | string |     "swapped"  | Event name of the `Swapped` event. |
+| `EVENT_NAME_SWAPPED`                 | string |     "swapped"  | Event name of the `Swapped` event. |
 | `EVENT_NAME_SWAP_FAILED`                 | string |       "swapFailed"      | Event name of the `SwapFailed` event. |
 | **Math Constants**                         |        |                  |                                              |    
 | `MIN_TICK`                                  | `sint32`  | -887272     | The minimum possible tick value as a sint32. |
@@ -206,8 +207,8 @@ dexGlobalStateSchema = {
 
 In this section, we describe the properties of DEX global state substore.
 
-* `positionCounter`: denotes the total number of positions currently in all DEX pools.
-* `collectableLSKFees`: a `uint64` number with the total fees in LSK token payed by traders to the DEX module but not yet collected by liquidity providers.
+* `positionCounter`: Denotes the total number of positions currently in all DEX pools.
+* `collectableLSKFees`: A `uint64` number with the total fees in LSK token payed by traders to the DEX module but not yet collected by liquidity providers.
 
 #### Pools Substore
 
@@ -216,7 +217,7 @@ In this section, we describe the properties of DEX global state substore.
 * The substore prefix is set to `SUBSTORE_PREFIX_POOLS`.
 * The store key is a byte array of length `NUM_BYTES_POOL_ID` representing a pool ID.
 * Each store value is the serialization of an object following the JSON schema `poolsSchema` presented below.
-* Notation: We let `pools(poolId)` denote the object stored in the DEX module store with substore prefix `SUBSTORE_PREFIX_POOLS` and key equal to `poolId`.
+* Notation: We let `pools` denote the object stored in the DEX module store with substore prefix `SUBSTORE_PREFIX_POOLS`, deserialized as a dictionary.
 
 The ID of the pool, `poolId` is defined as the concatenation of
 
@@ -304,7 +305,7 @@ Note that everywhere else the price ticks are serialized as usual `sint32` numbe
 * The substore prefix is set to `SUBSTORE_PREFIX_PRICE_TICK`.
 * Each store key is a byte array `poolId + tickToBytes(tickValue)` of length `NUM_BYTES_TICK_ID`, for a byte array `poolId` of length `NUM_BYTES_POOL_ID` presenting a pool ID and a tick value `tickValue`.
 * Each store value is the serialization of an object following the JSON schema `priceTickSchema` presented below.
-* We denote `tick(poolId, tickValue)` to be the price tick substore value with key `poolId + tickToBytes(tickValue)`.
+* We denote `ticks(poolId, tickValue)` to be the price tick substore value with key `poolId + tickToBytes(tickValue)` and `ticks` to be the price tick substore deserialized as a dictionary.
 
 ##### JSON Schema
 
@@ -356,7 +357,7 @@ In this section, we describe the properties of price tick substore.
 * The substore prefix is set to `SUBSTORE_PREFIX_POSITION`.
 * Each store key is a byte array of length `NUM_BYTES_POSITION_ID` representing a position ID.
 * Each store value is the serialization of an object following the JSON schema `positionSchema` presented below.
-* Notation: We let `positions(positionId)` denote the object stored in the DEX module store with substore prefix `SUBSTORE_PREFIX_POSITION` and key equal to `positionId`.
+* Notation: We  let `positions` denote the object stored in the DEX module store with substore prefix `SUBSTORE_PREFIX_POSITION`, deserialized as a dictionary.
 
 A position ID is a byte array of length `NUM_BYTES_POSITION_ID` given by `poolId + index.to_bytes(8, byteorder = 'big', signed = False)`, where `poolId` is the pool ID of the corresponding pool and `index` the index of the position. Indices are assigned to the positions sequentially among all the positions in all pools.
 
@@ -423,7 +424,7 @@ In this section, we describe the properties of positions substore.
 * The substore prefix is `SUBSTORE_PREFIX_SETTINGS`.
 * The store key is empty bytes.
 * The store value is the serialization of an object following the JSON schema `settingsSchema`.
-* Notation: We let `settings` denote the object stored in the DEX module store with substore prefix `SUBSTORE_PREFIX_SETTINGS` and key equal to empty bytes.
+* Notation: We let `settings` denote the object stored in the DEX module store with substore prefix `SUBSTORE_PREFIX_SETTINGS` and key equal to empty bytes, deserialized as a dictionary.
 
 ```java
 settingsSchema = {
@@ -519,6 +520,24 @@ This function returns the fee tier of a given pool given in units of parts-per-m
 def getFeeTier(poolId: PoolID) -> uint32:
     # deserialize the last 4 bytes of poolId
     return int.from_bytes(poolId[-4:], byteorder='big', signed = False)
+```
+
+#### getPoolIDFromPositionID
+
+This helper function computes the pool ID from a given position ID.
+
+```python
+def getPoolIDFromPositionID(positionID: PositionID) -> PoolID:
+    return positionID[:NUM_BYTES_POOL_ID]
+```
+
+#### getPoolIDFromTickID
+
+This helper function computes the pool ID from a given tick ID.
+
+```python
+def getPoolIDFromTickID(tickID: TickID) -> PoolID:
+    return tickID[:NUM_BYTES_POOL_ID]
 ```
 
 #### getPositionIndex
@@ -871,9 +890,9 @@ The function returns the current sqrt price of a given pool.
 
 ```python
 def getCurrentSqrtPrice(poolId: bytes, priceDirection: bool) -> SqrtPrice:
-    if pools(poolId) does not exist:
+    if pools[poolId] does not exist:
         raise Exception()
-    q96SqrtPrice = bytesToQ96(pools(poolId).sqrtPrice)
+    q96SqrtPrice = bytesToQ96(pools[poolId].sqrtPrice)
     if priceDirection:
         return q96SqrtPrice
     else:
@@ -882,103 +901,215 @@ def getCurrentSqrtPrice(poolId: bytes, priceDirection: bool) -> SqrtPrice:
 
 ### Endpoints for Off-Chain Services
 
-#### getProtocolSettings
+#### getAllPoolIDs
 
-Function returns the protocol settings substore as an object.
+Returns the list of all pool IDs in the DEX.
 
 ```python
-def getProtocolSettings() -> dict[str, Any]:
-    return protocol settings substore deserialized with settingsSchema
+def getAllPoolIDs() -> list[PoolID]:
+    return pools.keys()
+```  
+
+#### getAllTokenIDs
+
+Returns the list of all different token IDs in all the pools in DEX.
+
+```python
+def getAllTokenIDs() -> list[TokenID]:
+    tokens = set()        # empty set, no duplicated elements allowed
+    for poolId in pools:
+        tokens.add(getToken0Id(poolId))
+        tokens.add(getToken1Id(poolId))
+    return tokens
+```
+
+#### getAllPositionIDsInPool
+
+Returns the list of all position IDs in a given pool.
+
+```python
+def getAllPositionIDsInPool(poolId: PoolID) -> list[PositionID]:
+    result = []
+    for positionId in positions:
+        if getPoolIDFromPositionID(positionId) == poolId:
+            result.add(positionId)
+    return result
+```
+
+#### getAllTickIDsInPool
+
+Returns the list of all tick IDs in a given pool.
+
+```python
+def getAllTickIDsInPool(poolId: PoolID) -> list[TickID]:
+    result = []
+    for tickId in ticks:
+        if getPoolIDFromTickID(tickId) == poolId:
+            result.add(tickId)
+    return result
 ```
 
 #### getCurrentSqrtPrice
 
-The function returns the current sqrt price of a given pool.
-It has the same inputs, outputs and execution as the function exposed for other modules with the same name.
+The function returns the current sqrt price of a given pool in a Q96 format.
 
-Todo: decide whether we return sqrt price or actual price. Decide on the format.
+```python
+def getCurrentSqrtPrice(poolId: PoolID) -> Q96:
+    return bytesToQ96(pools[poolId].sqrtPrice)
+```
 
-#### getPriceImpact
+#### getProtocolSettings
 
-Todo: implement.
+Returns the protocol settings substore as an object.
 
-#####  Parameters
-
-* `poolId`: A byte array of length `NUM_BYTES_POOL_ID` with a pool ID.
-* `amount0`:
-* `amount1`:
-* `swapDirection`: A `bool` with the direction of the swap. If `True`, `amount` represents an amount of `token0`. Otherwise, `amount` represents an amount of `token1`.
-
-##### Returns
-
-Open point, how to revert swaps efficiently?
-
-##### Execution
-
+```python
+def getProtocolSettings() -> dict[str, Any]:
+    return settings
+```
 
 #### getPool
 
-The function returns the store value entry of a given pool Id in the pools substore.
-
-#####  Parameters
-
-* `poolId`: A byte array of length `NUM_BYTES_POOL_ID` with a pool ID.
-
-##### Returns
-
-The store value entry in the pools substore of the pool with pool ID equal to `poolId`.
-
-##### Execution
+Returns the store value entry of a given pool ID in the pools substore. It raises an exception if there is no entry with the given ID.
 
 ```python
-getPool(poolId):
-    if pools(poolId) does not exist:
+def getPool(poolId: PoolID) -> dict[str, Any]:
+    if pools[poolId] does not exist:
         raise Exception()
-    return pools(poolId)
-```
-
-#### getPriceTick
-
-The function returns the store value entry of a given price tick in the price tick substore.
-
-#####  Parameters
-
-* `poolId`: A byte array of length `NUM_BYTES_POOL_ID` with a pool ID.
-* `tickValue`:  A `sint32` integer with the tick value.
-
-##### Returns
-
-The store value entry in the price tick substore of the price tick with storage key containing `poolId` and `tickValue`.
-
-##### Execution
-
-```python
-getPriceTick(poolId, tickValue):
-    if tick(poolId, tickValue) is empty:
-        raise Exception()
-    return tick(poolId, tickValue)
+    return pools[poolId]
 ```
 
 #### getPosition
 
-The function returns the store value entry of a given position ID in the positions substore.
+Returns the store value entry of a given position ID in the positions substore. It raises an exception if there is no entry with the given ID.
 
-#####  Parameters
+```python
+    def getPosition(positionId: PositionID) -> object:
+        if positions[positionId] does not exist:
+            raise Exception()
+        return positions[positionId]
+```
 
-* `positionId`: A byte array of length `NUM_BYTES_POSITION_ID` with a position ID.
+#### getTick
+
+Returns the store value entry of a given tick ID in the price tick substore. It raises an exception if there is no entry with the given ID.
+
+```python
+    def getTick(tickId: TickID) -> object:
+        if ticks[tickId] does not exist:
+            raise Exception()
+        return ticks[tickId]
+```
+
+Returns the store value entry of a given pool ID and tick value in the price tick substore. It raises an exception if there is no entry with the given ID.
+
+```python
+    def getTick(poolId: PoolId, tickValue: int) -> object:
+        if ticks(poolId, tickValue) does not exist:
+            raise Exception()
+        return ticks(poolId, tickValue)
+```
+
+#### dryRunSwapExactIn
+
+The function dry runs the swap with exact input command with the given parameters. It raises an exception if swap fails. It uses the function `encodeTransaction` defined in [LIP 68][newTrsSchema], and functions `swap`, `computeCurrentPrice` defined in the [Swap interaction LIP][swapLIP].
 
 ##### Returns
 
-The store value entry in the positions substore of the position with position ID equal to `positionId`.
+- `amountIn`: The exact amount of swap input tokens.
+- `amountOut`: The amount of tokens received by the trader in the swap.
+- `priceBefore`: The price of the input token in terms of the output token before the swap. The price is computed as a product of pool prices along the swap route.
+- `priceAfter`: The price of the input token in terms of the output token after the swap. The price is computed as a product of pool prices along the swap route.
 
 ##### Execution
 
 ```python
-getPosition(positionId):
-    if positions(positionId) does not exist
-        raise Exception()
-    return positions(positionId)
+def dryRunSwapExactIn(tokenIdIn: TokenID, amountIn: int, tokenIdOut: TokenID,
+        minAmountOut: int, swapRoute: list[PoolID]) -> tuple[int, int, Q96, Q96]:
+    if tokenIdIn == tokenIdOut or swapRoute is empty or length(swapRoute) > MAX_HOPS_SWAP:
+        raise Exception("Invalid parameters")
+    try:
+        priceBefore = computeCurrentPrice(tokenIdIn, tokenIdOut, swapRoute)
+    except:
+        raise Exception("Invalid swap route")
+
+    tokens = [{id: tokenIdIn, amount: amountIn}]
+    # swap along all the pools in swapRoute
+    for poolId in swapRoute:
+        currentTokenIn = tokens[-1]
+        if getToken0Id(poolId) == currentTokenIn.id:
+            zeroToOne = True
+            IdOut = getToken1Id(poolId)
+        else if getToken1Id(poolId) == currentTokenIn.id:
+            zeroToOne = False
+            IdOut = getToken0Id(poolId)
+
+        # if zeroToOne then price decreases after the swap, otherwise it increases
+        sqrtLimitPrice = zeroToOne ? MIN_SQRT_RATIO : MAX_SQRT_RATIO
+        try:
+            (amountIn, amountOut, feesIn, feesOut) = swap(poolId, zeroToOne, sqrtLimitPrice, currentTokenIn.amount, False)
+        except ExceptionSwapCrossedTooManyTicks:
+            raise Exception("Crossed too many ticks")
+        tokens.append({id:IdOut, amount: amountOut})
+        fees.append({in: feesIn, out: feesOut})
+    if tokens[-1].amount < minAmountOut:
+        raise Exception("Too low output amount")
+    priceAfter = computeCurrentPrice(tokenIdIn, tokenIdOut, swapRoute)
+    return (amountIn, tokens[-1].amount, priceBefore, priceAfter)    
 ```
+
+#### dryRunSwapExactOut
+
+The function dry runs the swap with exact output command with the given parameters. It raises an exception if swap fails. It uses the function `encodeTransaction` defined in [LIP 68][newTrsSchema], and functions `swap`, `computeCurrentPrice` defined in the [Swap interaction LIP][swapLIP].
+
+##### Returns
+
+- `amountIn`: The exact amount of swap input tokens.
+- `amountOut`: The exact amount of swap output tokens.
+- `priceBefore`: The price of the input token in terms of the output token before the swap. The price is computed as a product of pool prices along the swap route.
+- `priceAfter`: The price of the input token in terms of the output token after the swap. The price is computed as a product of pool prices along the swap route.
+
+##### Execution
+
+```python
+def dryRunSwapExactOut(tokenIdIn: TokenID, maxAmountIn: int, tokenIdOut: TokenID,
+        amountOut: int, swapRoute: list[PoolID]) -> tuple[int, int, Q96, Q96]:
+    if tokenIdIn == tokenIdOut or swapRoute is empty or length(swapRoute) > MAX_HOPS_SWAP:
+        raise Exception("Invalid parameters")
+    try:
+        priceBefore = computeCurrentPrice(tokenIdIn, tokenIdOut, swapRoute)
+    except:
+        raise Exception("Invalid swap route")
+
+    inverseSwapRoute = invert swapRoute
+    tokens = [{id: tokenIdOut, amount: amountOut}]
+    # swap along all the pools in inverseSwapRoute
+    for poolId in inverseSwapRoute:
+        currentTokenOut = tokens[-1]
+
+        if getToken1Id(poolId) == currentTokenOut.id:
+            zeroToOne = True
+            IdIn = getToken0Id(poolId)
+        else if getToken0Id(poolId) == currentTokenOut.id:
+            zeroToOne = False
+            IdIn = getToken1Id(poolId)
+
+        # if zeroToOne then price decreases after the swap, otherwise it increases
+        sqrtLimitPrice = zeroToOne ? MIN_SQRT_RATIO : MAX_SQRT_RATIO
+        try:
+            (amountIn, amountOut, feesIn, feesOut) = swap(poolId, zeroToOne, sqrtLimitPrice, currentTokenOut.amount, False)
+        except ExceptionSwapCrossedTooManyTicks:
+            raise Exception("Crossed too many ticks")
+
+        tokens.append({id:IdIn, amount: amountIn})
+        fees.append({in: feesIn, out: feesOut})
+
+    # check that amount out is at least the minimum required amount
+    if  tokens[-1].amount >  maxAmountIn:
+        raise Exception("Too high input amount")
+    priceAfter = computeCurrentPrice(tokenIdIn, tokenIdOut, swapRoute)
+    return (tokens[-1].amount, amountOut, priceBefore, priceAfter)
+```
+
 
 ### Genesis Block Processing
 
@@ -1376,6 +1507,7 @@ For two numbers `a`,`b` and `c` in `Qn` format, we define the following arithmet
 * Convert to integer rounding up: `Q_n_ToIntRoundUp(a) = roundUp_n(a)`
 * Inversion in the decimal precision space: `inv_n(a) = div_n(1 << n, a)`
 
+[swapLIP]: https://github.com/LiskHQ/lips-staging/blob/main/proposals/lip-swap_Interaction.md
 [tokenLIP]: https://github.com/LiskHQ/lips/blob/main/proposals/lip-0051.md
 [uniswapv3whitepaper]: https://uniswap.org/whitepaper-v3.pdf
 [Q_wiki]: https://en.wikipedia.org/wiki/Q_(number_format)
@@ -1395,5 +1527,6 @@ For two numbers `a`,`b` and `c` in `Qn` format, we define the following arithmet
 [getNextSqrtPriceFromAmount0RoundingUp]: https://github.com/Uniswap/v3-core/blob/c05a0e2c8c08c460fb4d05cfdda30b3ad8deeaac/contracts/libraries/SqrtPriceMath.sol#L28
 [getNextSqrtPriceFromAmount0RoundingUpTypescript]: https://github.com/Uniswap/v3-sdk/blob/52fa487363e6ffa0dd96b554c0e2448f257dd69f/src/utils/sqrtPriceMath.ts#L71
 [LIP60]: https://github.com/LiskHQ/lips/blob/main/proposals/lip-0060.md
+[newTrsSchema]: https://github.com/LiskHQ/lips/blob/main/proposals/lip-0068.md
 [UniswapV3Fees]: https://docs.uniswap.org/protocol/concepts/V3-overview/fees
 [UniswapV3Ticks]: https://github.com/Uniswap/v3-core/blob/main/contracts/UniswapV3Factory.sol
