@@ -1557,13 +1557,13 @@ def getLiquidityForAmounts(currentSqrtPrice: Q96,
 
 # see Equation (4) in http://atiselsts.github.io/pdfs/uniswap-v3-liquidity-math.pdf
 def getLiquidityForAmount0(lowerSqrtPrice: Q96, upperSqrtPrice: Q96, amount0: uint64) -> uint64:
-    intermediate = muldiv_96(lowerSqrtPrice, upperSqrtPrice, Q96(1))
+    intermediate = mul_96(lowerSqrtPrice, upperSqrtPrice)
     result = muldiv_96(Q96(amount0), intermediate, sub_96(upperSqrtPrice, lowerSqrtPrice))
     return roundDown_96(result)
 
 # see Equation (9) in http://atiselsts.github.io/pdfs/uniswap-v3-liquidity-math.pdf
 def getLiquidityForAmount1(lowerSqrtPrice, upperSqrtPrice, amount1):
-    result = muldiv_96(Q96(amount1), Q96(1), sub_96(upperSqrtPrice, lowerSqrtPrice))
+    result = div_96(Q96(amount1), sub_96(upperSqrtPrice, lowerSqrtPrice))
     return roundDown_96(result)
 ```
 
@@ -1749,6 +1749,236 @@ This LIP, together with the ["Introduce DEX Module" LIP][lip-define-dex-module] 
 ## Reference Implementation
 
 TBD
+
+## Appendix
+
+### User Flow for Commands
+
+This section contains recommendation of how the parameters for the different commands defined in this LIP can be prepared.
+In particular, we describe which command parameters should be requested from the user and how the other parameters can be computed.
+
+#### Global User Interface Settings
+
+We assume the following values can be set by the user as global settings in the user interfaces and do not have to be requested for every interaction (e.g., position creation or update).
+The settings can be initialized with some default values as suggested:
+
+- `slippageTolerance`: Slippages here refers to the potential difference in price between the time the transaction is signed by a user and the time the transaction is processed by the blockchain. The value `slippageTolerance` is an integer describing the maximum acceptable slippage to the user in parts-per-million. For instance, `slippageTolerance = 3000` means that the price is allowed to change by at most 0.3 %. We recommend to use `slippageTolerance = 5000` as an initial default for the user interfaces and adjust it according to the observed slippage in practice. Ideally, the value is chosen high enough such that in the vast majority of cases commands are executed successful, but low enough that users do not suffer from worse prices due to price manipulations or sandwich-attacks, for instance.
+- `transactionValidityInSeconds`: This value determines how long a transaction that is submitted via the user interfaces is valid. Note that in the user interface it may be better to show the equivalent number of minutes instead. We recommend using an initial value of `transactionValidityInSeconds = 15 * 60`. For any command with a property `maxTimestampValid`, the user interfaces should then set `maxTimestampValid = currentTime + transactionValidityInSeconds` where `currentTime` is the current timestamp in seconds (as used in the Lisk blockchain for timestamps in blocks).
+
+#### Creating a New Position
+
+When creating a new position, a user first selects the following:
+
+- `tokenIDInput0`: The token ID of the first token in the pool. Here by default the `LSK` token could be chosen.
+- `tokenIDInput1`: The token ID of the second token in the pool.
+- `feeTier`: The fee tier of the pool. Here by default the most common fee tier (e.g., 0.3 %) could be selected.
+
+If `tokenIDInput0 < tokenIDInput1`, we let `tokenID0 = tokenIDInput0` and `tokenID1 = tokenIDInput1` in the following sections, otherwise we assume `tokenID0 = tokenIDInput1` and `tokenID1 = tokenIDInput0`. Let further `poolID = computePoolID(tokenID0, tokenID1, feeTier)`.
+
+**Case 1**: A pool with ID `poolID` does not exist in the Pools substore.
+
+In this case, the following steps are needed:
+
+1. The user is informed that the pool needs to be created and that this implies a fee given by `POOL_CREATION_FEE`.
+2. The user has to provide a starting price `startingPriceInput`. The UI computes `(tickInitialPrice, startingPriceOutput) = computeTickAndPriceRoundedToTick(startingPrice)`. It is recommended that the user interface shows the rounded starting price `startingPriceOutput` so that the user is aware of the actual starting price that would be used in the command.
+3. The user chooses the range for the position by selection a lower bound `priceInputLower` and an upper bound `priceInputUpper`. The UI computes:
+   - `(tickLower, priceOutputLower) = computeTickAndPriceRoundedToTick(priceInputLower)`,
+   - `(tickUpper, priceOutputUpper) = computeTickAndPriceRoundedToTick(priceInputUpper)`.
+  Again it is recommended that the user interface shows the rounded prices `priceOutputLower` and `priceOutputUpper` so that the user is aware of the actual lower and upper bound for the position that would be used in the command.
+4. The user now can choose the desired amounts of tokens for the position. These depend on the starting price as well as lower and upper price previously provided by the user as follows:
+   - `tickInitialPrice <=  tickLower`: The user can only provide an amount in `token1`. Let `inputAmount0 = 0` and `inputAmount1` be the input amount of `token1` provided by the user.
+   - `tickLower < tickInitialPrice <  tickUpper`: The user has to provide both `token0` and `token1`. If the user enters `inputAmount0` as the amount of `token0`, then `inputAmount1 = computeAmount1ForPosition(tickLower, tickUpper, tickToPrice(tickInitialPrice), inputAmount0)` is computed and displayed as the amount of `token1`. Similarly, if the user enters `inputAmount1` as the amount of `token1`, then `inputAmount0 = computeAmount0ForPosition(tickLower, tickUpper, tickToPrice(tickInitialPrice), inputAmount1)` is computed and displayed as the amount of `token0`.
+   - `tickUpper <=  tickInitialPrice`: The user can only provide an amount in `token0`. Let `inputAmount1 = 0` and `inputAmount0` be the input amount of `token0` provided by the user.
+
+Once the user has provided the data as described above, the create-pool is prepared with the following parameters:
+
+- "tokenID0": `tokenID0`
+- "tokenID1": `tokenID1`
+- "feeTier": `feeTier`
+- "tickInitialPrice": `tickInitialPrice`
+- "initialPosition"
+  - "tickLower": `tickLower`
+  - "tickUpper": `tickUpper`
+  - "amount0Desired": `inputAmount0`
+  - "amount1Desired": `inputAmount1`
+- "maxTimestampValid": `maxTimestampValid` as described in the global user settings
+
+**Case 2**: A pool with ID `poolID` exists in the Pools substore.
+
+In this case, the following steps are needed:
+
+1. The user selects the price range for the position as in Step 3 of Case 1 above. The current distribution of liquidity and the current price can be useful information shown to the user in this step.
+2. The user now can choose the desired amounts of tokens for the position. Let `sqrtCurrentPrice = getCurrentSqrtPrice(poolID, True)` be the current price in the pool. Then the amounts depend on the current price as well as lower and upper price previously provided by the user as follows:
+    - `sqrtCurrentPrice <=  priceToTick(tickLower)`: The user can only provide an amount in `token1`.
+        - `inputAmount0 = 0`,
+        - `inputAmount1 =` input amount of `token1` provided by the user.
+    - `priceToTick(tickLower) < tickInitialPrice <  priceToTick(tickUpper)`: The user has to provide both `token0` and `token1`.
+        - If the user enters `inputAmount0` as the amount of `token0`, then `inputAmount1 = computeAmount1ForPosition(tickLower, tickUpper, sqrtCurrentPrice, inputAmount0)` is computed and displayed as the amount of `token1`.
+        - Similarly, if the user enters `inputAmount1` as the amount of `token1`, then `inputAmount0 = computeAmount0ForPosition(tickLower, tickUpper, sqrtCurrentPrice, inputAmount1)` is computed and displayed as the amount of `token0`.
+   - `priceToTick(tickUpper) <=  sqrtCurrentPrice`: The user can only provide an amount in `token0`.
+       - `inputAmount1 = 0`,
+       - `inputAmount0 =` input amount of `token0` provided by the user.
+
+Let further `(minAmount0, minAmount1) = computeMinAmountsForPosition(tickLower, tickUpper, currentSqrtPrice, inputAmount0, inputAmount1, slippageTolerance)`. Once the user has provided the data as described above, the create-position is prepared with the following parameters:
+
+- "poolID": `computePoolID(tokenID0, tokenID1, feeTier)`
+- "tickLower": `tickLower`
+- "tickUpper": `tickUpper`
+- "amount0Desired": `inputAmount0`
+- "amount1Desired": `inputAmount1`
+- "amount0Min": `minAmount0`
+- "amount1Min": `minAmount1`
+- "maxTimestampValid": `maxTimestampValid` as described in the global user settings
+
+
+#### Adding Liquidity to a Position
+
+In this case, the following steps are needed:
+
+1. The user selects one of their positions. Let `inputPositionID` be the position ID of the position selected by the user.
+2. Compute the following values:
+   - `poolID =  getPoolIDFromPositionID(inputPositionID)`
+   - `sqrtCurrentPrice = getCurrentSqrtPrice(poolID, True)`
+   - `tickLower = getPosition(inputPositionID).tickLower`
+   - `tickUpper = getPosition(inputPositionID).tickUpper`
+3. The user chooses `inputAmount0` and `inputAmount1` as described in Step 2 in Case 2 above. Additionally, `minAmount0` and `minAmount1` are computed in the same way. Let further `(minAmount0, minAmount1) = computeMinAmountsForPosition(tickLower, tickUpper, currentSqrtPrice, inputAmount0, inputAmount1, slippageTolerance)`.
+
+Once the user has provided the data as described above, the add-liquidity command is prepared with the following parameters:
+
+- "positionID": `inputPositionID`
+- "amount0Desired": `inputAmount0`
+- "amount1Desired": `inputAmount1`
+- "amount0Min": `minAmount0`
+- "amount1Min": `minAmount1`
+- "maxTimestampValid": `maxTimestampValid` as described in the global user settings
+
+#### Removing Liquidity from a New Position
+
+1. The user selects one of their positions. Let `inputPositionID` be the position ID of the position selected by the user.
+2. Compute the following values:
+   - `poolID =  getPoolIDFromPositionID(inputPositionID)`
+   - `sqrtCurrentPrice = getCurrentSqrtPrice(poolID, True)`
+   - `tickLower = getPosition(inputPositionID).tickLower`
+   - `tickUpper = getPosition(inputPositionID).tickUpper`
+   - `liquidity = getPosition(inputPositionID).liquidity`
+3. The user selects the percentage of the liquidity that should be removed. Let `userInputPercentageLiquidity` be the fraction of liquidity to be removed in parts-per-million, i.e., `0 < userInputPercentageLiquidity <= 10**6`. We then compute the following values and can show the computed amounts to the user.
+   - `liquidityToRemove = liquidity * userInputPercentageLiquidity // 10**6`
+   - `amount0Position = getAmount0ForLiquidity(currentSqrtPrice, upperSqrtPrice, liquidity)`
+   - `amount1Position = getAmount1ForLiquidity(lowerSqrtPrice, currentSqrtPrice, liquidity)`
+   - `amount0ToRemove = getAmount0ForLiquidity(currentSqrtPrice, upperSqrtPrice, liquidityToRemove)`
+   - `amount1ToRemove = getAmount1ForLiquidity(lowerSqrtPrice, currentSqrtPrice, liquidityToRemove)`
+   - `(minAmount0, minAmount1) = computeMinAmountsForPosition(tickLower, tickUpper, currentSqrtPrice, amount0ToRemove, amount1ToRemove, slippageTolerance)`.
+
+Once the user has provided the data as described above, the remove-liquidity command is prepared with the following parameters:
+
+   - "positionID": `inputPositionID`
+   - "liquidityToRemove": `liquidityToRemove`
+   - "amount0Min": `minAmount0`
+   - "amount1Min": `minAmount1`
+   - "maxTimestampValid": `maxTimestampValid` as described in the global user settings
+
+### Auxiliary functions
+
+#### computeTickAndPriceRoundedToTick
+
+For a given price as floating point number, this function computes the corresponding tick value as well as the floating point price corresponding to the tick value.
+
+```python
+def computeTickAndPriceRoundedToTick(price: float) -> (tickValue: int32, priceRoundedToTick: float):
+    sqrtPriceFloat = sqrt(price)
+    sqrtPriceQ96 = Q96(sqrtPriceFloat)
+    tickValue = priceToTick(sqrtPriceQ96)
+    sqrtPriceRoundedQ96 = tickToPrice(tickValue)
+    priceRoundedToTick = Q_96_ToFloat(mul_96(sqrtPriceRoundedQ96, sqrtPriceRoundedQ96))
+    return (tickValue, priceRoundedToTick)
+```
+
+#### computeAmount0ForPosition
+
+For a position with the boundaries given by `tickLower` and `tickUpper`, the current price `currentSqrtPrice` within the range of the position and an amount of `token1` to be added to the position, this function computes the corresponding amount of `token0`.
+
+```python
+def computeAmount0ForPosition(tickLower: int32, tickUpper: int32, currentSqrtPrice: Q96, amount1: uint64) -> uint64:
+    lowerSqrtPrice = tickToPrice(tickLower)
+    upperSqrtPrice = tickToPrice(tickUpper)
+    liquidity = getLiquidityForAmount1(lowerSqrtPrice, currentSqrtPrice, amount1)
+    return getAmount0ForLiquidity(currentSqrtPrice, upperSqrtPrice, liquidity)
+```
+
+#### computeAmount1ForPosition
+
+For a position with the boundaries given by `tickLower` and `tickUpper`, the current price `currentSqrtPrice` within the range of the position and an amount of `token0` to be added to the position, this function computes the corresponding amount of `token1`.
+
+```python
+def computeAmount1ForPosition(tickLower: int32, tickUpper: int32, currentSqrtPrice: Q96, amount0: uint64) -> uint64:
+    lowerSqrtPrice = tickToPrice(tickLower)
+    upperSqrtPrice = tickToPrice(tickUpper)
+    liquidity = getLiquidityForAmount0(currentSqrtPrice, upperSqrtPrice, amount0)
+    return getAmount1ForLiquidity(lowerSqrtPrice, currentSqrtPrice, liquidity)
+```
+
+#### getAmount0ForLiquidity
+
+This function computes the amount of `token0` that correspond to a given amount of liquidity and price boundaries as sqrt prices.
+This function is similar to the function [getAmount0ForLiquidity](https://github.com/Uniswap/v3-periphery/blob/b06959dd01f5999aa93e1dc530fe573c7bb295f6/contracts/libraries/LiquidityAmounts.sol#L82) in Uniswap v3.
+
+```python
+# see Equation (4) in http://atiselsts.github.io/pdfs/uniswap-v3-liquidity-math.pdf
+def getAmount0ForLiquidity(lowerSqrtPrice: Q96, upperSqrtPrice: Q96, liquidity: uint64) -> uint64:
+    res = muldiv_96(Q96(liquidity), upperSqrtPrice - lowerSqrtPrice, upperSqrtPrice)
+    return div_96(res, lowerSqrtPrice)
+```
+
+#### getAmount1ForLiquidity
+
+This function computes the amount of `token1` that correspond to a given amount of liquidity and price boundaries as sqrt prices.
+This function is similar to the function [getAmount1ForLiquidity](https://github.com/Uniswap/v3-periphery/blob/b06959dd01f5999aa93e1dc530fe573c7bb295f6/contracts/libraries/LiquidityAmounts.sol#L102) in Uniswap v3.
+
+```python
+# see Equation (8) in http://atiselsts.github.io/pdfs/uniswap-v3-liquidity-math.pdf
+def getAmount1ForLiquidity(lowerSqrtPrice: Q96, upperSqrtPrice: Q96, liqudity: uint64) -> uint64:
+    return mul_96(Q96(liqudity), upperSqrtPrice - lowerSqrtPrice)
+```
+
+#### computeMinAmountsForPosition
+
+For a position with the boundaries given by `tickLower` and `tickUpper`, the current price `currentSqrtPrice` within the range of the position, a slippage tolerance `slippageTolerance` as described above, a desired amount of `token0` to be added to the position and a desired amount of `token1` to be added to the position, this function returns `(minAmount0, minAmount1)` where these are the minimum amounts of tokens that can be used as input parameters to guarantee that the command only succeeds if the price slippage is at most the value given as input.
+
+```python
+def computeMinAmountsForPosition(tickLower: int32, tickUpper: int32, currentSqrtPrice: Q96, amount0: uint64, amount1: uint64, slippageTolerance: uint64) -> (uint64, uint64):
+    lowerSqrtPrice = tickToPrice(tickLower)
+    upperSqrtPrice = tickToPrice(tickUpper)
+    slippageFractionFloat = sqrt(1 + slippageTolerance / (10**6))
+    slippageFraction = Q96(slippageFractionFloat)
+
+    # If the price decreases, less token1 are required if the amount of token0 stays unchanged.
+    # Therefore the lower bound amount1min implies a bound on the price decrease.
+    currentSqrtPriceDecreased = div_96(sqrtCurrentPrice, slippageFraction)
+    if currentSqrtPriceDecreased <= lowerSqrtPrice:
+        # If the decreased price is below the position range, the amount of token1 is 0.
+        amount1Min = 0
+    elif currentSqrtPriceDecreased >= upperSqrtPrice:
+        # If the decreased price is above the position range, the amount of token1 is still the same as without the price change.
+        amount1Min = amount1
+    else:
+        liquidity = getLiquidityForAmount0(currentSqrtPriceDecreased, upperSqrtPrice, amount0)
+        amount1Min = getAmount1ForLiquidity(lowerSqrtPrice, currentSqrtPriceDecreased, liquidity)
+
+    # If the price increases, less token0 are required if the amount of token1 stays unchanged.
+    # Therefore the lower bound amount0min implies a bound on the price increase.
+    currentSqrtPriceIncreased = mul_96(sqrtCurrentPrice, slippageFraction)
+    if currentSqrtPriceIncreased >= lowerSqrtPrice:
+        # If the increased price is above the position range, the amount of token0 is 0.
+        amount0Min = 0
+    elif currentSqrtPriceIncreased <= upperSqrtPrice:
+        # If the increased price is below the position range, the amount of token0 is still the same as without the price change.
+        amount0Min = amount0
+    else:
+        liquidity = getLiquidityForAmount1(lowerSqrtPrice, currentSqrtPriceIncreased, amount1)
+        amount0Min = getAmount0ForLiquidity(currentSqrtPriceIncreased, upperSqrtPrice, liquidity)
+
+    return (amount0Min, amount1Min)
+```
 
 
 [lip-0027]: https://github.com/LiskHQ/lips/blob/main/proposals/lip-0027.md
