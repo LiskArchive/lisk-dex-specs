@@ -266,6 +266,7 @@ def execute(trs: Transaction) -> None:
     tokenIdOut = trs.params.tokenIdOut
     tokens = [{id: tokenIdIn, amount: trs.params.amountTokenIn}]
     swapRoute = trs.params.swapRoute
+    currentHeight = height of the block containing trs
     try:
         priceBefore = computeCurrentPrice(tokenIdIn, tokenIdOut, swapRoute)
     except:
@@ -287,7 +288,7 @@ def execute(trs: Transaction) -> None:
         # if zeroToOne then price decreases after the swap, otherwise it increases
         sqrtLimitPrice = zeroToOne ? MIN_SQRT_RATIO : MAX_SQRT_RATIO
         try:
-            (amountIn, amountOut, feesIn, feesOut) = swap(poolId, zeroToOne, sqrtLimitPrice, currentTokenIn.amount, False)
+            (amountIn, amountOut, feesIn, feesOut) = swap(poolId, zeroToOne, sqrtLimitPrice, currentTokenIn.amount, False, currentHeight)
         except ExceptionSwapCrossedTooManyTicks:    # specific exception class for crossing too many ticks
             # crossed too many ticks
             raiseSwapException(SWAP_FAILED_TOO_MANY_TICKS, tokenIdIn,
@@ -423,6 +424,7 @@ def execute(trs: Transaction) -> None:
     tokenIdIn = trs.params.tokenIdIn
     tokenIdOut = trs.params.tokenIdOut
     senderAddress = SHA256(trs.senderPublicKey)[:NUM_BYTES_ADDRESS]
+    currentHeight = height of the block containing trs
     try:
         priceBefore = computeCurrentPrice(tokenIdIn, tokenIdOut, trs.params.swapRoute)
     except:
@@ -444,7 +446,7 @@ def execute(trs: Transaction) -> None:
         # if zeroToOne then price decreases after the swap, otherwise it increases
         sqrtLimitPrice = zeroToOne ? MIN_SQRT_RATIO : MAX_SQRT_RATIO
         try:
-            (amountIn, amountOut, feesIn, feesOut) = swap(poolId, zeroToOne, sqrtLimitPrice, currentTokenOut.amount, False)
+            (amountIn, amountOut, feesIn, feesOut) = swap(poolId, zeroToOne, sqrtLimitPrice, currentTokenOut.amount, False, currentHeight)
         except ExceptionSwapCrossedTooManyTicks:    # specific exception class for crossing too many ticks
             # crossed too many ticks
             raiseSwapException(SWAP_FAILED_TOO_MANY_TICKS, tokenIdIn,
@@ -586,6 +588,7 @@ def execute(trs: Transaction) -> None:
     amountTokenIn = trs.params.maxAmountTokenIn
     poolId = trs.params.poolId
     sqrtLimitPrice = bytesToQ96(trs.params.sqrtLimitPrice)
+    currentHeight = height of the block containing trs
     try:
         priceBefore = computeCurrentPrice(tokenIdIn, tokenIdOut, [poolId])
     except:
@@ -603,7 +606,7 @@ def execute(trs: Transaction) -> None:
         zeroToOne = False
 
     try:
-        (amountIn, amountOut, feesIn, feesOut) = swap(poolId, zeroToOne, sqrtLimitPrice, amountTokenIn, True)
+        (amountIn, amountOut, feesIn, feesOut) = swap(poolId, zeroToOne, sqrtLimitPrice, amountTokenIn, True, currentHeight)
     except ExceptionSwapCrossedTooManyTicks:    # specific exception class for crossing too many ticks
         # crossed too many ticks
         raiseSwapException(SWAP_FAILED_TOO_MANY_TICKS, tokenIdIn,
@@ -657,6 +660,7 @@ Unlike the [swap function][swapuniswap] of Uniswap v3, this function does not se
 - `sqrtLimitPrice`: A Q96 number with the price limit not to be crossed by the swap.
 - `amountSpecified`: The exact amount of tokens for the swap. It is the input amount if `exactInput == True` and is the output amount otherwise.
 - `exactInput`: A boolean indicating whether a swap is performed with exact input or with exact output.
+- `currentHeight`: An integer with the height of the block when the swap is performed, is needed for correct tick crossing.
 
 ##### Returns
 
@@ -672,7 +676,8 @@ def swap(poolId: PoolID,
     zeroToOne: bool,
     sqrtLimitPrice: Q96,
     amountSpecified: uint64,
-    exactInput: bool
+    exactInput: bool,
+    currentHeight: int
     ) -> tuple[uint64, uint64, uint64, uint64]:
 
     feeTier = getFeeTier(poolId)
@@ -700,7 +705,7 @@ def swap(poolId: PoolID,
         currentTick = priceToTick(poolSqrtPriceQ96)
         if zeroToOne and ticks(poolId, currentTick) exists and poolSqrtPriceQ96 ==  tickToPrice(currentTick):
             # need to cross the current tick from right to left
-            crossTick(currentTick, False)
+            crossTick(currentTick, False, currentHeight)
             numCrossedTicks += 1
 
         # get the price for the next tick
@@ -740,21 +745,16 @@ def swap(poolId: PoolID,
         totalFeesOut += feeOut
 
         # compute liquidity providers fees
-        validatorFeePartIn = tokenIn == TOKEN_ID_LSK ? settings.validatorsLSKRewardsPart : 0
-        validatorFeePartOut = tokenOut == TOKEN_ID_LSK ? settings.validatorsLSKRewardsPart : 0
-        liquidityFeeIn = muldiv_96(Q96(feeIn), Q96(FEE_TIER_PARTITION - protocolFeePart - validatorFeePartIn), Q96(FEE_TIER_PARTITION))
-        liquidityFeeOut = muldiv_96(Q96(feeOut), Q96(FEE_TIER_PARTITION - protocolFeePart - validatorFeePartOut), Q96(FEE_TIER_PARTITION))
-
-        if tokenIn == TOKEN_ID_LSK:
-            dexState.collectableLSKFees += liquidityFeeIn
-        if tokenOut == TOKEN_ID_LSK:
-            dexState.collectableLSKFees += liquidityFeeOut
+        validatorFeePartIn = tokenIn == TOKEN_ID_LSK ? VALIDATORS_LSK_REWARD_PART : 0
+        validatorFeePartOut = tokenOut == TOKEN_ID_LSK ? VALIDATORS_LSK_REWARD_PART : 0
+        liquidityFeeInQ96 = muldiv_96(Q96(feeIn), Q96(FEE_TIER_PARTITION - validatorFeePartIn), Q96(FEE_TIER_PARTITION))
+        liquidityFeeOutQ96 = muldiv_96(Q96(feeOut), Q96(FEE_TIER_PARTITION - validatorFeePartOut), Q96(FEE_TIER_PARTITION))
 
         # update liquidity provider fees
-        liquidityFee0 = zeroToOne ? liquidityFeeIn : liquidityFeeOut
-        liquidityFee1 = zeroToOne ? liquidityFeeOut : liquidityFeeIn
-        globalFeesQ96_0 = div_96(Q96(liquidityFee0), Q96(pools[poolId].liquidity))
-        globalFeesQ96_1 = div_96(Q96(liquidityFee1), Q96(pools[poolId].liquidity))
+        liquidityFee0Q96 = zeroToOne ? liquidityFeeInQ96 : liquidityFeeOutQ96
+        liquidityFee1Q96 = zeroToOne ? liquidityFeeOutQ96 : liquidityFeeInQ96
+        globalFeesQ96_0 = div_96(liquidityFee0Q96, Q96(pools[poolId].liquidity))
+        globalFeesQ96_1 = div_96(liquidityFee1Q96, Q96(pools[poolId].liquidity))
         feeGrowthGlobal0Q96_0 = bytesToQ96(pools[poolId].feeGrowthGlobal0)
         pools[poolId].feeGrowthGlobal0 = q96ToBytes(add_96(feeGrowthGlobal0Q96_0, globalFeesQ96_0))
         feeGrowthGlobal1Q96_1 = bytesToQ96(pools[poolId].feeGrowthGlobal1)
@@ -763,7 +763,7 @@ def swap(poolId: PoolID,
         # if sqrtNextTickPriceQ96 was reached by increasing the price,
         # cross the next tick from left to right
         if poolSqrtPriceQ96 == sqrtNextTickPriceQ96 and not zeroToOne:
-            crossTick(nextTick, True)
+            crossTick(nextTick, True, currentHeight)
             numCrossedTicks += 1
 
     # update the pool's state with the correct sqrtPrice
@@ -851,8 +851,10 @@ where the functions `getAmount0Delta`, `getAmount1Delta` and `computeNextPrice` 
 The function crosses a tick either from left to right or from right to left by updating all the necessary state store information.
 
 ```python
-def crossTick(tickId: TickID, leftToRight: bool) -> None:
+def crossTick(tickId: TickID, leftToRight: bool, currentHeight: int) -> None:
     poolId = tickId[:NUM_BYTES_POOL_ID]
+    # update pool rewards at the current liquidity
+    updatePoolRewards(poolId, currentHeight)
     # update liquidity
     if leftToRight:
         pools[poolId].liquidity += ticks(poolId, tickId).liquidityNet
@@ -866,22 +868,22 @@ def crossTick(tickId: TickID, leftToRight: bool) -> None:
     feeGrowthGlobal1Q96 = bytesToQ96(pools[poolId].feeGrowthGlobal1)
     feeGrowthOutside1Q96 = bytesToQ96(ticks(poolId, tickId).feeGrowthOutside1)
     ticks(poolId, tickId).feeGrowthOutside1 = q96ToBytes(sub_96(feeGrowthGlobal1Q96, feeGrowthOutside1Q96))
+    # update rewards per liquidity outside
+    rewardsAccumulatorQ96 = bytesToQ96(pools[poolId].rewardsPerLiquidityAccumulator)
+    rewardsOutsideQ96 = bytesToQ96(ticks(poolId, tickId).rewardsPerLiquidityOutside)
+    ticks(poolId, tickId).rewardsPerLiquidityOutside = q96ToBytes(sub_96(rewardsAccumulatorQ96, rewardsOutsideQ96))
 ```
 
 #### transferFeesFromPool
 
-The function computes the correct amount of validator and protocol fees, transfers them from the given pool address to the protocol fee address and the validator rewards pool, and locks the transferred tokens.
+The function computes the correct amount of validator fees, transfers them from the given pool address to the validator rewards pool, and locks the transferred tokens.
 
 ```python
 def transferFeesFromPool(amount: int, id: TokenID, pool: PoolID) -> None:
-    protocolFee = roundDown_96(muldiv_96(Q96(amount), Q96(settings.protocolFeePart), Q96(FEE_TIER_PARTITION)))
     validatorFee = 0
     if id == TOKEN_ID_LSK:
-        validatorFee = roundDown_96(muldiv_96(Q96(amount), Q96(settings.validatorsLSKRewardsPart), Q96(FEE_TIER_PARTITION)))
+        validatorFee = roundDown_96(muldiv_96(Q96(amount), Q96(VALIDATORS_LSK_REWARD_PART), Q96(FEE_TIER_PARTITION)))
 
-    if protocolFee > 0:
-        transferFromPool(pool, settings.protocolFeeAddress, id, protocolFee)
-        Token.lock(settings.protocolFeeAddress, MODULE_NAME_DEX, id, protocolFee)
     if validatorFee > 0:
         transferFromPool(pool, ADDRESS_VALIDATOR_REWARDS_POOL, id, validatorFee)
         Token.lock(ADDRESS_VALIDATOR_REWARDS_POOL, MODULE_NAME_DEX, id, validatorFee)
@@ -1051,7 +1053,7 @@ def getOptimalSwapPool(tokenIn: TokenID, tokenOut: TokenID, amount: int,
                         exactIn: bool) -> tuple(PoolID, int):
     token0, token1 = tokenIn, tokenOut sorted lexicographically
     candidatePools = []
-    for setting in settings.poolCreationSettings:
+    for setting in dexGlobalData.poolCreationSettings:
         # all possible pools to swap token0 and token1
         potentialPoolId = token0 + token1 + setting.feeTier.to_bytes(4, byteorder='big')
         if potentialPoolId in pools:
@@ -1128,7 +1130,7 @@ def getRoute(tokenIn: TokenID, tokenOut: TokenID, poolsGraph: PoolsGraph, amount
     for poolTokenOut in exceptionalRoute[1:]:
         candidatePools = []
         token0, token1 = poolTokenIn, poolTokenOut sorted lexicographically
-        for setting in settings.poolCreationSettings:
+        for setting in dexGlobalData.poolCreationSettings:
             # all possible pools to swap tokenIn and tokenOut
             candidatePools.add(token0 + token1 + setting.feeTier.to_bytes(4, byteorder='big'))
         let bestPool be pool in candidatePools with maximal pools[pool].liquidity
