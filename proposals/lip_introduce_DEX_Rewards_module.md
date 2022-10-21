@@ -18,11 +18,15 @@ This LIP is licensed under the [Creative Commons Zero 1.0 Universal](https://cre
 
 ## Motivation
 
-The decentralized exchange sidechain in the Lisk ecosystem has three different types of actors: validators, traders and liquidity providers. The goal of the DEX Rewards module is to incentivize the participation of all actors and to guide the DEX sidechain native token economics.
+The decentralized exchange sidechain in the Lisk ecosystem has three different types of actors: validators, traders and liquidity providers. The goal of the DEX Rewards module is to incentivize the participation of validators and liquidity providers and to guide the DEX sidechain native token economics.
+
+The DEX sidechain will keep big volumes of different tokens, so the job of securing the chain is essential. Validator incentivization aims to motivate users to invest their DEX tokens into supporting the chain.
+
+Liquidity providers are the main actors in a decentralized exchange: their liquidity makes swaps possible. DEX Rewards module aims to attract token holders by giving out rewards. In additional to financial gain, liquidity providers obtain a stake in the whole sidechain and are motivated to further contribute to the success of the exchange.
 
 ## Rationale
 
-Incentivization is accomplished together with the [DEX module][dexModule]: the DEX Rewards module mints reward tokens to the block validator, liquidity provider rewards pool and trader rewards pool.  The DEX module distributes tokens from these pools among liquidity providers and traders. Additionally, the DEX module collects LSK rewards for DEX sidechain validators and the DEX Rewards module distributes the rewards between validators once every round.
+Incentivization is accomplished together with the [DEX module][dexModule]: the DEX Rewards module mints reward tokens to the block validator and Liquidity Provider Rewards Pool. The DEX module distributes tokens from this pool among liquidity providers. Additionally, the DEX module collects LSK rewards for DEX sidechain validators and the DEX Rewards module distributes the rewards between validators once every round.
 
 
 <img src="lip-introduce_DEX_Rewards_module/rewards-diagram.png" alt="drawing" width="845">
@@ -31,15 +35,13 @@ _Figure 1: the diagram of DEX rewards payout. The green arrows indicate the logi
 
 The rewards in LSK for validators provide additional incentive to be a DEX sidechain validator and thus boosts the value of the DEX sidechain token.
 
-### Liquidity Provider and Trader Reward Payout
+### Liquidity Provider Reward Payout
 
-Both liquidity provider and trader rewards are paid out in the DEX module, however we explain the payout logic here.
+Liquidity provider rewards are paid out in the DEX module, however we explain the payout logic here.
 
-Liquidity providers are incentivized to provide liquidity in LSK, so the DEX module keeps track of total uncollected LSK liquidity providers fees. The rewards are paid out together with the collected LSK fees. The amount is proportional to the collected LSK fees and the balance of the liquidity provider rewards pool, and inverse proportional to the uncollected LSK fees.
+Liquidity providers are incentivized to provide liquidity in particular pools, as indicated by the incentivized pool list in the DEX module. The rewards are paid out together with the collected fees. The amount is proportional to the liquidity provided and to the number of blocks when the price was in the range of the position at the end of the block. Additionally, the rewards depend on the incentivized pool multiplier: the higher is the multiplier of a pool, the bigger reward is distributed among the liqudity providers of the pool.
 
-Traders are incentivized to swap LSK tokens and the incentives are paid out together with each swap. The reward payout is proportional to the LSK volume of the swap and to the balance of the trader rewards pool.
-
-These payout algorithms guarantee that the actors are incentivized proportionally to their activity (if the incentives are collected at the same time). The reward amounts are easily computed and the minting of a fixed amount of rewards per block bounds the reward token inflation.
+These payout algorithms aim to incentivize the actors proportionally to their contribution and to the time duration when their liquidity was active. The minting of a fixed amount of rewards per block bounds the reward token inflation.
 
 ## Specification
 
@@ -55,13 +57,11 @@ We define the following constants:
 |`MODULE_NAME_DEX`          |     `string`        |           "dex"       |Name of the DEX module, as  defined in the [DEX module][dexModule].|
 |`NUM_BYTES_ADDRESS`        |   `uint32`        |           20          |The number of bytes of an address.|
 |`ADDRESS_LIQUIDITY_PROVIDER_REWARDS_POOL` |`bytes`|`SHA256(b"liquidityProviderRewardsPool")[:NUM_BYTES_ADDRESS]`|  The address of the liquidity provider rewards pool, as  defined in the [DEX module][dexModule].|
-|`ADDRESS_TRADER_REWARDS_POOL`|`bytes`|`SHA256(b"traderRewardsPool")[:NUM_BYTES_ADDRESS]` |The address of the trader rewards pool, as  defined in the [DEX module][dexModule].|
 |`ADDRESS_VALIDATOR_REWARDS_POOL`|`bytes`|`SHA256(b"validatorRewardsPool")[:NUM_BYTES_ADDRESS]`|The address of the validator rewards pool, as  defined in the [DEX module][dexModule].|
 |`TOKEN_ID_DEX_NATIVE`      |   `bytes`           |           TBA         |Token ID of the native token of DEX sidechain.         |
-|   `TOKEN_ID_LSK`          |   `bytes`           |`0x00 00 00 01 00 00 00 00`|       Token ID of the LSK token.                  |
-|`BLOCK_REWARD_LIQUIDITY_PROVIDERS`|   `uint64`   |       90000000            |Amount of liquidity provider rewards per block, in DEX native token.|
-|`BLOCK_REWARD_TRADERS`     |   `uint64`        |       60000000            | Amount of trader rewards per block, in DEX native token.           |
-|`BLOCK_REWARD_VALIDATORS`  |   `uint64`        |       150000000           |   Amount of validator rewards per block, in DEX native token.     |
+|   `TOKEN_ID_LSK`          |   `bytes`           |`0x00 00 00 00 00 00 00 00`|       Token ID of the LSK token.                  |
+|   `EPOCH_LENGTH_REWARD_REDUCTION`          |   `uint32`           | 3000000 |           The duration of the epoch after which block reward decreases.   |
+|   `PERCENTAGE_VALIDATOR_REWARD`          |   `uint32`           | 50 |     The fraction of block reward paid to the validator, in percents. The rest is paid to liqudity providers.   |
 |`EVENT_NAME_VALIDATOR_TRADE_REWARDS_PAYOUT`|`string`|   "validatorTradeRewardsPayout"  |Name of the validator trade rewards payout event.|
 |`EVENT_NAME_GENERATOR_REWARDS_PAYOUT`|    `string`   |       "generatorRewardsPayout"            | Name of the generator rewards payout event.    |
 |`REWARD_NO_REDUCTION`      |   `uint32`        |       0                   |Return code for no block reward reduction.         |
@@ -131,13 +131,31 @@ generatorRewardsPayoutSchema = {
 }
 
 ```
-
 - `amount`: the amount of rewards minted.
 - `reduction`: an integer code specifying the reason for reduction. Allowed values are: `REWARD_REDUCTION_SEED_REVEAL`, `REWARD_REDUCTION_MAX_PREVOTES`, `REWARD_NO_REDUCTION`.
 
 ### Internal Functions
 
 The DEX Rewards module defines the following internal functions.
+
+#### getDefaultBlockReward
+
+The function returns the block reward for a given height.
+
+##### Execution
+
+```python
+def getDefaultBlockReward(height: int) -> int:
+    if height < EPOCH_LENGTH_REWARD_REDUCTION:
+        return 800000000
+    if height < 2*EPOCH_LENGTH_REWARD_REDUCTION:
+        return 700000000
+    if height < 3*EPOCH_LENGTH_REWARD_REDUCTION:
+        return 600000000
+    if height < 4*EPOCH_LENGTH_REWARD_REDUCTION:
+        return 500000000
+    return 400000000
+```
 
 #### transferValidatorLSKRewards
 
@@ -172,16 +190,36 @@ This function is used to retrieve the reward of a block at a given height, takin
 def getValidatorBlockReward(blockHeader: BlockHeader) -> tuple[uint64, uint32]:
     if Random.isSeedRevealValid(blockHeader.generatorAddress, blockHeader.seedReveal) == False:
         return (0, REWARD_REDUCTION_SEED_REVEAL)
-
+    validatorReward = getDefaultBlockReward(blockHeader.height) * PERCENTAGE_VALIDATOR_REWARD / 100
     if impliesMaximalPrevotes(blockHeader) == False:
-        return (BLOCK_REWARD_VALIDATORS // REWARD_REDUCTION_FACTOR_BFT, REWARD_REDUCTION_MAX_PREVOTES)
-
-    return (BLOCK_REWARD_VALIDATORS, REWARD_NO_REDUCTION)
+        return (validatorReward // REWARD_REDUCTION_FACTOR_BFT, REWARD_REDUCTION_MAX_PREVOTES)
+    return (validatorReward, REWARD_NO_REDUCTION)
 ```
 
 ### Protocol Logic for Other Modules
 
-This module does not define any specific logic for other modules.
+#### getLPBlockRewards
+
+This function returns the total amount of block rewards for liquidity providers in a block range with the given start height and end height. The reward for the block at start height is excluded, the reward for the block at end height is included.
+
+```python
+def getLPBlockRewards(startHeight: int, endHeight: int) -> int:
+    if endHeight < startHeight:
+        raise Exception()
+    EPOCHS = [EPOCH_LENGTH_REWARD_REDUCTION,
+        2*EPOCH_LENGTH_REWARD_REDUCTION,
+        3*EPOCH_LENGTH_REWARD_REDUCTION,
+        4*EPOCH_LENGTH_REWARD_REDUCTION]
+    height = startHeight + 1    # reward for the start block is excluded
+    rewards = 0
+    for changeHeight in EPOCHS:
+        if changeHeight > startHeight and changeHeight < endHeight:
+            rewards += (changeHeight - height) * getDefaultBlockReward(height)
+            height = changeHeight
+    rewards += (endHeight - height) * getDefaultBlockReward(height)
+    rewards += getDefaultBlockReward(endHeight)
+    return rewards * (100 - PERCENTAGE_VALIDATOR_REWARD) / 100
+```
 
 ### Endpoints for Off-Chain Services
 
@@ -208,10 +246,9 @@ def afterTransactionsExecute(b: Block) -> None:
         topics = [b.header.generatorAddress]
     )
 
-    Token.mint(ADDRESS_LIQUIDITY_PROVIDER_REWARDS_POOL, TOKEN_ID_DEX_NATIVE, BLOCK_REWARD_LIQUIDITY_PROVIDERS)
-    Token.lock(ADDRESS_LIQUIDITY_PROVIDER_REWARDS_POOL, MODULE_NAME_DEX, TOKEN_ID_DEX_NATIVE, BLOCK_REWARD_LIQUIDITY_PROVIDERS)
-    Token.mint(ADDRESS_TRADER_REWARDS_POOL, TOKEN_ID_DEX_NATIVE, BLOCK_REWARD_TRADERS)
-    Token.lock(ADDRESS_TRADER_REWARDS_POOL, MODULE_NAME_DEX, TOKEN_ID_DEX_NATIVE, BLOCK_REWARD_TRADERS)
+    liquidityReward = getDefaultBlockReward(blockHeader.height) * (100 - PERCENTAGE_VALIDATOR_REWARD) / 100
+    Token.mint(ADDRESS_LIQUIDITY_PROVIDER_REWARDS_POOL, TOKEN_ID_DEX_NATIVE, liquidityReward)
+    Token.lock(ADDRESS_LIQUIDITY_PROVIDER_REWARDS_POOL, MODULE_NAME_DEX, TOKEN_ID_DEX_NATIVE, liquidityReward)
 
     validators = Validators.getGeneratorList()
     if b.header.height % length(validators) == 0:
