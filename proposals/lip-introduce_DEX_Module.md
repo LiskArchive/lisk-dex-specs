@@ -46,16 +46,22 @@ Thus we rely on fixed point arithmetic, which is specified in the [Appendix](#fi
 
 In practice, we work with `Q96` unsigned numbers with 96 bits for integer and 96 bits for fractional parts (also see [the Wikipedia page about signed Q number format][Q_wiki]). Note that the intermediate results of arithmetic computations with `Q96` numbers may need more memory space, e.g. the implementation of `div_n(a, b) = (a << n) // b` needs to store the result of `a << n`.
 
-### Fee tiers
+### Fee Tiers
 
 Swap fees are a natural way to incentivize liquidity providers to add tokens into liquidity pools.
-Following the [design of Uniswap v3][UniswapV3Fees], the protocol of the DEX module allows creation of pools only with fee tiers specified in protocol settings store and records fee tiers in units of parts-per-million of the swap amount (i.e. 0.0001%).
+Following the [design of Uniswap v3][UniswapV3Fees], the protocol of the DEX module allows creation of pools only with fee tiers specified in DEX global data store and records fee tiers in units of parts-per-million of the swap amount (i.e. 0.0001%).
 The pools with higher price volatility are recommended to have higher fee tiers to compensate for potential impermanent loss.
 
 Each fee tier has a value of tick spacing associated with it.
 Pools with higher fee tier assume greater price changes, so not all ticks in the pool are initialized to optimize total performance.
 The following fee tiers and tick spacings are recommended: `{100, 2}, {500, 10}, {3000, 60}, {10000, 200}`.
 See also the [Uniswap v3 implementation][UniswapV3Ticks].
+
+### Incentivized Pool List
+
+DEX module maintains a list of incentivized liquidity pools. Providing liquidity in an incentivized pool is rewarded by the protocol. This is supposed to attract more liquidity to a chosen set of pools and to facilitate low slippage swaps between the most popular tokens in DEX. Incentivizing liquidity in all pools would dilute the value of incentives for each particular liquidity provider and would be prone to abuse: users could create many custom pools with custom tokens and receive incentives for the liquidity which is not needed by any user.
+
+When a pool is added to the incentivized pool list, a priority multiplier integer value must be set for the pool. This value indicates the relative importance of this pool compared to other pools. Total liquidity provider incentives in a block are shared among all incentivized pools proportionally to the multiplier, so liquidity providers in a pool with multiplier 10 will receive twice as many rewards as liquidity providers in a pool with multiplier 5.
 
 ## Specification
 
@@ -115,20 +121,17 @@ We define the following constants:
 | `POSITION_CREATION_FEE`   | `uint64` | TBD    | This amount of tokens is transferred to the protocol fee account when creating a new position.|       
 | **DEX Rewards Module Constants**                |        |                  |                            |                            
 | `ADDRESS_LIQUIDITY_PROVIDER_REWARDS_POOL`                    | bytes |  `SHA256(b"liquidityProviderRewardsPool")[:NUM_BYTES_ADDRESS]`  | The address of the liquidity provider rewards pool.  |
-| `ADDRESS_TRADER_REWARDS_POOL`                    | bytes |  `SHA256(b"traderRewardsPool")[:NUM_BYTES_ADDRESS]`  | The address of the trader rewards pool.  |
 | `ADDRESS_VALIDATOR_REWARDS_POOL`                    | bytes |  `SHA256(b"validatorRewardsPool")[:20]`  | The address of the validator rewards pool.  |
 | `TOKEN_ID_REWARDS`        | bytes | TBD    | The token ID of the token used for liquidity provider, trader and validator incentives, as defined in the [DEX Rewards module](https://github.com/LiskHQ/lips-staging/blob/main/proposals/lip_introduce_DEX_Rewards_module.md).         |
+| `VALIDATORS_LSK_REWARD_PART`                    | `uint32` |  200000  | The portion of LSK swap fees that are paid to the validators, in parts-per-million.  |
 | **Token Module Constants**                |        |                  |                           |                            
 | `TOKEN_ID_LSK`              |  bytes |   `0x 00 00 00 00 00 00 00 00`           |    The token ID of the LSK token as defined in the [Token module LIP][tokenLIP].     |      
 | `NUM_BYTES_TOKEN_ID`                | `uint32` | 8                     | The number of bytes of a token ID.  |         
-| **Fee Module Constants**                |        |                  |                           |                            
-| `TOKEN_ID_FEE_DEX`        | bytes | TBD    | The ID of the token used for fees, as defined in the [Fee module LIP](https://github.com/LiskHQ/lips/blob/main/proposals/lip-0048.md). This defines the type of token in which the additional fees for pool creation and position creation are paid.         |
 | **DEX Module Store**                    |        |                  | |                                                       |
-| `SUBSTORE_PREFIX_STATE`                    | bytes  | 0x0000           | Substore prefix of the DEX global state substore. |                                                       |
 | `SUBSTORE_PREFIX_POOL`                    | bytes  | 0x4000           | Substore prefix of the pools substore. |
 | `SUBSTORE_PREFIX_PRICE_TICK`                    | bytes  | 0x8000           | Substore prefix of the price tick substore. |
 | `SUBSTORE_PREFIX_POSITION`                    | bytes  | 0xc000           | Substore prefix of the positions substore. |
-| `SUBSTORE_PREFIX_SETTINGS`                    | bytes  | 0xe000           | Substore prefix of the protocol settings substore. |
+| `SUBSTORE_PREFIX_DATA`                    | bytes  | 0xe000           | Substore prefix of the DEX global data substore. |
 | **DEX Module Command Names**              |        |                  |                                                |
 | `COMMAND_SWAP_EXACT_INPUT`                    | string | "swapExactInput"                | Command name of swap exact input command. |
 | `COMMAND_SWAP_EXACT_OUTPUT`                   | string | "swapExactOutput"                | Command name of swap exact output command. |
@@ -172,44 +175,6 @@ In the previous example, the square root price would be sqrt(4) = 2.
 
 The key-value pairs in the module store are organized as follows:
 
-#### DEX Global State substore
-
-##### Substore Prefix, Store Key, and Store Value
-
-* The substore prefix is set to `SUBSTORE_PREFIX_STATE`.
-* The store key is empty bytes.
-* The store value is the serialization of an object following the JSON schema `dexGlobalStateSchema` presented below.
-* Notation: We let `dexGlobalState` denote the object stored in the DEX module store with substore prefix `SUBSTORE_PREFIX_STATE` and empty key.
-
-##### JSON Schema
-
-```java
-dexGlobalStateSchema = {
-    "type": "object",
-    "required": [
-        "positionCounter",
-        "collectableLSKFees"
-    ],
-    "properties": {
-        "positionCounter": {
-            "dataType": "uint64",
-            "fieldNumber": 1
-        },
-        "collectableLSKFees": {
-            "dataType": "uint64",
-            "fieldNumber": 2
-        }
-    }
-}
-```
-
-##### Properties
-
-In this section, we describe the properties of DEX global state substore.
-
-* `positionCounter`: Denotes the total number of positions currently in all DEX pools.
-* `collectableLSKFees`: A `uint64` number with the total fees in LSK token payed by traders to the DEX module but not yet collected by liquidity providers.
-
 #### Pools Substore
 
 ##### Substore Prefix, Store Key, and Store Value
@@ -235,6 +200,8 @@ poolsSchema = {
     "required": [
         "liquidity",
         "sqrtPrice",
+        "rewardsPerLiquidityAccumulator",
+        "heightRewardsUpdate",
         "feeGrowthGlobal0",
         "feeGrowthGlobal1",
         "tickSpacing"
@@ -249,19 +216,28 @@ poolsSchema = {
             "maxLength": MAX_NUM_BYTES_Q96,
             "fieldNumber": 2
         },
-        "feeGrowthGlobal0": {
+        "rewardsPerLiquidityAccumulator": {
             "dataType": "bytes",
             "maxLength": MAX_NUM_BYTES_Q96,
             "fieldNumber": 3
         },
+        "heightRewardsUpdate": {
+            "dataType": "uint32",
+            "fieldNumber": 4
+        }
+        "feeGrowthGlobal0": {
+            "dataType": "bytes",
+            "maxLength": MAX_NUM_BYTES_Q96,
+            "fieldNumber": 5
+        },
         "feeGrowthGlobal1": {
             "dataType": "bytes",
             "maxLength": MAX_NUM_BYTES_Q96,
-            "fieldNumber": 4
+            "fieldNumber": 6
         },
         "tickSpacing": {
             "dataType": "uint32",
-            "fieldNumber": 5
+            "fieldNumber": 7
         }
     }
 }
@@ -269,10 +245,10 @@ poolsSchema = {
 
 ##### Properties
 
-In this section, we describe the properties of pools substore.
-
 * `liquidity`: A `uint64` integer representing the virtual liquidity of the pool.
 * `sqrtPrice`: A `byte` array with the square root of the current price in `Q96` format.
+* `rewardsPerLiquidityAccumulator`: A `byte` array with the cumulative rewards per liquidity in `Q96` format.
+* `heightRewardsUpdate`: An integer value indicating the height when the rewards per liquidity were last updated for this pool.
 * `feeGrowthGlobal0`: A `byte` array with the total amount of fees in `token0` that have been collected per unit of virtual liquidity  in `Q96` format.
 * `feeGrowthGlobal1`: A `byte` array with the total amount of fees in `token1` that have been collected per unit of virtual liquidity in `Q96` format.
 * `tickSpacing`: A `uint32` integer providing the tick spacing of the pool. A tick with index `i` can only be initialized in this pool if `i % tickSpacing == 0` holds.
@@ -316,7 +292,8 @@ priceTickSchema = {
         "liquidityNet",
         "liquidityGross",
         "feeGrowthOutside0",
-        "feeGrowthOutside1"
+        "feeGrowthOutside1",
+        "rewardsPerLiquidityOutside"
     ],
     "properties": {
         "liquidityNet": {
@@ -336,6 +313,11 @@ priceTickSchema = {
             "dataType": "bytes",
             "maxLength": MAX_NUM_BYTES_Q96,
             "fieldNumber": 4
+        },
+        "rewardsPerLiquidityOutside": {
+            "dataType": "bytes",
+            "maxLength": MAX_NUM_BYTES_Q96,
+            "fieldNumber": 5
         }
     }
 }
@@ -343,12 +325,11 @@ priceTickSchema = {
 
 ##### Properties
 
-In this section, we describe the properties of price tick substore.
-
 * `liquidityNet`: A `sint64` integer representing the amount of liquidity added (or, if negative, removed) when the tick is crossed going left to right.
 * `liquidityGross`: A `uint64` integer representing the gross tally of liquidity pointing to the tick.
-* `feeGrowthOutside0`: A `byte` array with the fee for `token0` accumulated “outside” the tick  in `Q96` format.
-* `feeGrowthOutside1`: A `byte` array with the fee for `token1` accumulated “outside” the tick  in `Q96` format.
+* `feeGrowthOutside0`: A `byte` array with the fee for `token0` accumulated “outside” the tick in `Q96` format.
+* `feeGrowthOutside1`: A `byte` array with the fee for `token1` accumulated “outside” the tick in `Q96` format.
+* `rewardsPerLiquidityOutside`: A `byte` array with the rewards per liqudity accumulated “outside” the tick in `Q96` format.
 
 #### Positions substore
 
@@ -372,7 +353,8 @@ positionSchema = {
         "liquidity",
         "feeGrowthInsideLast0",
         "feeGrowthInsideLast1",
-        "ownerAddress"
+        "ownerAddress",
+        "rewardsPerLiquidityLast"
     ],
     "properties": {
         "tickLower": {
@@ -401,6 +383,11 @@ positionSchema = {
             "dataType": "bytes",
             "length": NUM_BYTES_ADDRESS,
             "fieldNumber": 6
+        },
+        "rewardsPerLiquidityLast": {
+            "dataType": "byte",
+            "maxLength": MAX_NUM_BYTES_Q96,
+            "fieldNumber": 7
         }
     }
 }
@@ -408,50 +395,40 @@ positionSchema = {
 
 ##### Properties
 
-In this section, we describe the properties of positions substore.
-
 * `tickLower`: A `sint32` tick value with the lower price tick of the position. It is assigned during position creation and cannot be updated.
 * `tickUpper`: A `sint32` tick value with the upper price tick of the position. It is assigned during position creation and cannot be updated.
 * `liquidity`: A `uint64` integer representing the virtual liquidity added by the position.
 * `feeGrowthInsideLast0`: A `byte` array with the fees per unit of virtual liquidity for `token0` since the last time the fees were collected, in `Q96` format.
 * `feeGrowthInsideLast1`: A `byte` array with the fees per unit of virtual liquidity for `token1` since the last time the fees were collected, in `Q96` format.
 * `ownerAddress`: A `byte` array with the address of the owner of the position.
+* `rewardsPerLiquidityLast`: A `byte` array with the cumulative rewards per liquidity of the position at the moment when it was last updated.
 
-#### Protocol settings substore
+#### DEX global data substore
 
 ##### Substore Prefix, Store Key, and Store Value
 
-* The substore prefix is `SUBSTORE_PREFIX_SETTINGS`.
+* The substore prefix is `SUBSTORE_PREFIX_DATA`.
 * The store key is empty bytes.
-* The store value is the serialization of an object following the JSON schema `settingsSchema`.
-* Notation: We let `settings` denote the object stored in the DEX module store with substore prefix `SUBSTORE_PREFIX_SETTINGS` and key equal to empty bytes, deserialized as a dictionary.
+* The store value is the serialization of an object following the JSON schema `globalDataSchema`.
+* Notation: We let `dexGlobalData` denote the object stored in the DEX module store with substore prefix `SUBSTORE_PREFIX_DATA` and key equal to empty bytes, deserialized as a dictionary.
 
 ```java
-settingsSchema = {
+globalDataSchema = {
     "type": "object",
     "required": [
-    "protocolFeeAddress",
-    "protocolFeePart",
-    "validatorsLSKRewardsPart",
-    "poolCreationSettings"
+        "positionCounter",
+        "poolCreationSettings",
+        "incentivizedPools",
+        "totalIncentivesMultiplier"
     ],
     "properties": {
-        "protocolFeeAddress": {
-            "dataType": "bytes",
-            "length": NUM_BYTES_ADDRESS,
+        "positionCounter": {
+            "dataType": "uint64",
             "fieldNumber": 1
-        },
-        "protocolFeePart": {
-            "dataType": "uint32",
-            "fieldNumber": 2
-        },
-        "validatorsLSKRewardsPart": {
-            "dataType": "uint32",
-            "fieldNumber": 3
         },
         "poolCreationSettings": {
             "type": "array",
-            "fieldNumber": 4,
+            "fieldNumber": 2,
             "items": {
                 "type": "object",
                 "required": ["feeTier", "tickSpacing"],
@@ -466,6 +443,29 @@ settingsSchema = {
                     }
                 }
             }
+        },
+        "incentivizedPools": {
+            "type": "array",
+            "fieldNumber": 3,
+            "items": {
+                "type": "object",
+                "required": ["poolId", "multiplier"],
+                "properties": {
+                    "poolId": {
+                        "dataType": "bytes",
+                        "length": NUM_BYTES_POOL_ID,
+                        "fieldNumber": 1
+                    },
+                    "multiplier": {
+                        "dataType": "uint32",
+                        "fieldNumber": 2
+                    }
+                }
+            }
+        },
+        "totalIncentivesMultiplier": {
+            "dataType": "uint32",
+            "fieldNumber": 4
         }
     }
 }
@@ -473,13 +473,10 @@ settingsSchema = {
 
 ##### Properties
 
-In this section, we describe the properties of protocol settings substore.
-
-* `protocolFeeAddress`: A byte array with the address to which the protocol fee is assigned.
-* `protocolFeePart `: A `uint32` with a value between 0 and 10^6 (inclusive) denoting the protocol fee in parts-per-million of the swap amount.
-For instance, `protocolFeePart == 100000` means that 10 % of the fees collected in a trade are assigned to `protocolFeeAddress`.
-* `validatorsLSKRewardsPart`: A `uint32` with a value between 0 and 10^6 (inclusive) denoting the portion of LSK fees that are paid to the validators, in parts-per-million.
+* `positionCounter`: The total number of positions currently in all DEX pools.
 * `poolCreationSettings`: An array of allowed pool settings in the DEX protocol, each entry records a fee tier together with tick spacing. A `uint32` number `feeTier` between 0 and 10^6 (inclusive) represents a fee tier in units of parts-per-million of the swap amount, i.e. any swap in a pool with fee tier 10000 pays `1%` of the amount as fee. If tick spacing of a pool is given by a `uint32` number `tickSpacing` then only ticks with indices `i` satisfying `i % tickSpacing == 0` can be initialized in this pool.
+* `incentivizedPools`: The array with all incentivized pools in the DEX protocol, each entry records the pool ID and the multiplier of the pool. The entries are sorted by `poolId` in the ascending order.
+* `totalIncentivesMultiplier`: A number with the sum of multipliers of all incentivized pools.
 
 ### Internal Auxiliary Functions
 
@@ -608,18 +605,50 @@ def transferPoolToPool(
     Token.lock(poolAddressReceive, MODULE_NAME_DEX, tokenID, amount)
 ```
 
-#### transferToProtocolFeeAccount
+#### transferToValidatorLSKPool
 
-This function transfers an amount of a certain token from a user account to the protocol fee address.
+This function transfers and locks an amount of LSK tokens from the given account to the validator rewards pool.
+
+##### Execution
 
 ```python
-def transferToProtocolFeeAccount(
-    senderAddress: Address,
-    tokenId: TokenID,
-    amount: uint64
-    ) -> None:
-    Token.transfer(senderAddress, settings.protocolFeeAddress, tokenId, amount)
-```   
+def transferToValidatorLSKPool(senderAddres: Address, amount: int) -> None:
+    Token.transfer(senderAddres, TOKEN_ID_LSK, amount, ADDRESS_VALIDATOR_REWARDS_POOL)
+    Token.lock(ADDRESS_VALIDATOR_REWARDS_POOL, MODULE_NAME_DEX, amount)
+```
+
+#### computeNewRewardsPerLiquidity
+
+For a given pool and current height, the function computes the updated rewards per liquidity accumulator at this height.
+
+```python
+def computeNewRewardsPerLiquidity(poolId: PoolID, currentHeight: int) -> Q96:
+    if (poolId is not in pool.poolId for some pool in dexGlobalData.incentivizedPools)
+        or pools[poolId].heightRewardsUpdate >= currentHeight:
+        raise Exception("Invalid arguments")
+
+    poolMultiplier = pool.multiplier for pool in dexGlobalData.incentivizedPools with pool.poolId == poolId
+    totalReward = DEXRewards.getLPBlockRewards(pools[poolId].heightRewardsUpdate, currentHeight)
+    reward = totalReward * poolMultiplier / dexGlobalData.totalIncentivesMultiplier
+    rewardPerLiquidity = div_96(Q96(reward), Q96(pools[poolId].liquidity))
+    currentRewardsPerLiquidity = bytesToQ96(pools[poolId].rewardsPerLiquidityAccumulator)
+    return add_96(rewardPerLiquidity, currentRewardsPerLiquidity)
+```
+
+#### updatePoolRewards
+
+The function updates the rewards per liquidity value of a given pool.
+
+```python
+def updatePoolRewards(poolId: PoolID, currentHeight: int) -> None:
+    if (poolId is not in pool.poolId for some pool in dexGlobalData.incentivizedPools)
+        or pools[poolId].heightRewardsUpdate >= currentHeight:
+        # pool is not incentivized or all rewards already collected
+        return
+    newRewardsPerLiquidity = computeNewRewardsPerLiquidity(poolId, currentHeight)
+    pools[poolId].rewardsPerLiquidityAccumulator = q96ToBytes(newRewardsPerLiquidity)
+    pools[poolId].heightRewardsUpdate = currentHeight
+```
 
 ### Internal Math Functions
 
@@ -836,31 +865,6 @@ def computeNextPrice(
 
 ### Protocol Logic for Other Modules
 
-#### updateProtocolFee
-
-Function sets the protocol fee address and the protocol fee.
-
-```python
-def updateProtocolFee(protocolFeeAddress: Address, protocolFeePart: uint32) -> None:
-    if protocolFeePart > 1000000:
-        raise Exception("Fee part can not be greater than 100%")
-
-    settings.protocolFeeAddress = protocolFeeAddress
-    settings.protocolFeePart = protocolFeePart
-```
-
-#### updateValidatorsLSKRewardsPart
-
-Function sets the validator LSK rewards fee and the reward pool address.
-
-```python
-def updateValidatorsLSKRewardsPart(validatorsLSKRewardsPart: uint32) -> None:
-    if validatorsLSKRewardsPart > 1000000:
-        raise Exception()
-
-    settings.validatorsLSKRewardsPart = validatorsLSKRewardsPart
-```
-
 #### addPoolCreationSettings
 
 Function adds a new pair of fee tier and tick spacing to the pool creation settings. Fee tiers are given in units of parts-per-million of the swap amount, so they are numbers between 0 and 10^6 (inclusive). Fee tier has to be different from the already existing fee tiers.
@@ -871,11 +875,11 @@ Function adds a new pair of fee tier and tick spacing to the pool creation setti
 def addPoolCreationSettings(feeTier: uint32, tickSpacing: uint32) -> None:
     if feeTier > 1000000:
         raise Exception("Fee tier can not be greater than 100%")
-    for creationSettings in settings.poolCreationSettings:
+    for creationSettings in dexGlobalData.poolCreationSettings:
         if creationSettings.feeTier == feeTier:
             raise Exception("Can not update fee tier")
 
-    settings.poolCreationSettings.append({"feeTier": feeTier, "tickSpacing": tickSpacing})
+    dexGlobalData.poolCreationSettings.append({"feeTier": feeTier, "tickSpacing": tickSpacing})
 ```
 
 #### getCurrentSqrtPrice
@@ -897,6 +901,28 @@ def getCurrentSqrtPrice(poolId: bytes, priceDirection: bool) -> SqrtPrice:
         return q96SqrtPrice
     else:
         return inv_96(q96SqrtPrice)
+```
+
+#### updateIncentivizedPools
+
+The function adds the given pool to the list of incentivized pools with the given multiplier. If the pool is already incentivized then the multiplier is updated. Setting `multiplier = 0` will remove the pool from the incentivized pool list.
+
+##### Execution
+
+```python
+def updateIncentivizedPools(poolId: PoolID, multiplier: int, currentHeight: int) -> None:
+    # update rewards per liquidity in all pools
+    for pool in dexGlobalData.incentivizedPools:
+        updatePoolRewards(pool.poolId, currentHeight)
+
+    for pool in dexGlobalData.incentivizedPools:
+        if pool.poolId == poolId:
+            dexGlobalData.totalIncentivesMultiplier -= pool.multiplier
+            remove pool from dexGlobalData.incentivizedPools
+    if multiplier >= 0:
+        dexGlobalData.totalIncentivesMultiplier += multiplier
+        dexGlobalData.incentivizedPools.append({"poolId": poolId, "multiplier": multiplier})
+        sort dexGlobalData.incentivizedPools with respect to poolId in ascending order
 ```
 
 ### Endpoints for Off-Chain Services
@@ -958,13 +984,13 @@ def getCurrentSqrtPrice(poolId: PoolID) -> Q96:
     return bytesToQ96(pools[poolId].sqrtPrice)
 ```
 
-#### getProtocolSettings
+#### getDEXGlobalData
 
-Returns the protocol settings substore as an object.
+Returns the DEX global data substore as an object.
 
 ```python
 def getProtocolSettings() -> dict[str, Any]:
-    return settings
+    return dexGlobalData
 ```
 
 #### getPool
@@ -1110,7 +1136,6 @@ def dryRunSwapExactOut(tokenIdIn: TokenID, maxAmountIn: int, tokenIdOut: TokenID
     return (tokens[-1].amount, amountOut, priceBefore, priceAfter)
 ```
 
-
 ### Genesis Block Processing
 
 The following two steps are executed as part of the genesis block processing, see the [LIP 60][LIP60] for details.
@@ -1121,40 +1146,23 @@ The following two steps are executed as part of the genesis block processing, se
 genesisDEXSchema = {
     "type": "object",
     "required": [
-        "stateSubstore",
         "poolSubstore",
         "priceTickSubstore",
         "positionSubstore",
-        "settingsSubstore"
+        "dexGlobalDataSubstore"
     ],
     "properties": {
-        "stateSubstore":{
-            "type": "object",
-            "fieldNumber": 1,
-            "required": [
-                "positionCounter",
-                "collectableLSKFees"
-            ],
-            "properties": {
-                "positionCounter": {
-                    "dataType": "uint64",
-                    "fieldNumber": 1
-                },
-                "collectableLSKFees": {
-                    "dataType": "uint64",
-                    "fieldNumber": 2
-                }
-            }
-        },
         "poolSubstore": {
             "type": "array",
-            "fieldNumber": 2,
+            "fieldNumber": 1,
             "items": {
                 "type": "object",
                 "required": [
                     "poolId",
                     "liquidity",
                     "sqrtPrice",
+                    "rewardsPerLiquidityAccumulator",
+                    "heightRewardsUpdate",
                     "feeGrowthGlobal0",
                     "feeGrowthGlobal1",
                     "tickSpacing"
@@ -1174,26 +1182,35 @@ genesisDEXSchema = {
                         "maxLength": MAX_NUM_BYTES_Q96,
                         "fieldNumber": 3
                     },
-                    "feeGrowthGlobal0": {
+                    "rewardsPerLiquidityAccumulator": {
                         "dataType": "bytes",
                         "maxLength": MAX_NUM_BYTES_Q96,
                         "fieldNumber": 4
                     },
+                    "heightRewardsUpdate": {
+                        "dataType": "uint32",
+                        "fieldNumber": 5
+                    }
+                    "feeGrowthGlobal0": {
+                        "dataType": "bytes",
+                        "maxLength": MAX_NUM_BYTES_Q96,
+                        "fieldNumber": 6
+                    },
                     "feeGrowthGlobal1": {
                         "dataType": "bytes",
                         "maxLength": MAX_NUM_BYTES_Q96,
-                        "fieldNumber": 5
+                        "fieldNumber": 7
                     },
                     "tickSpacing": {
                         "dataType": "uint32",
-                        "fieldNumber": 6
+                        "fieldNumber": 8
                     }
                 }
             }
         },
         "priceTickSubstore": {
             "type": "array",
-            "fieldNumber": 3,
+            "fieldNumber": 2,
             "items": {
                 "type": "object",
                 "required": [
@@ -1201,7 +1218,8 @@ genesisDEXSchema = {
                     "liquidityNet",
                     "liquidityGross",
                     "feeGrowthOutside0",
-                    "feeGrowthOutside1"
+                    "feeGrowthOutside1",
+                    "rewardsPerLiquidityOutside"
                 ],
                 "properties": {
                     "tickId": {
@@ -1226,13 +1244,18 @@ genesisDEXSchema = {
                         "dataType": "bytes",
                         "maxLength": MAX_NUM_BYTES_Q96,
                         "fieldNumber": 5
+                    },
+                    "rewardsPerLiquidityOutside": {
+                        "dataType": "bytes",
+                        "maxLength": MAX_NUM_BYTES_Q96,
+                        "fieldNumber": 6
                     }
                 }
             }
         },
         "positionSubstore": {
             "type": "array",
-            "fieldNumber": 4,
+            "fieldNumber": 3,
             "items": {
                 "type": "object",
                 "required": [
@@ -1241,7 +1264,9 @@ genesisDEXSchema = {
                     "tickUpper",
                     "liquidity",
                     "feeGrowthInsideLast0",
-                    "feeGrowthInsideLast1"
+                    "feeGrowthInsideLast1",
+                    "ownerAddress",
+                    "rewardsPerLiquidityLast"
                 ],
                 "properties": {
                     "positionId": {
@@ -1275,36 +1300,32 @@ genesisDEXSchema = {
                         "dataType": "bytes",
                         "length": NUM_BYTES_ADDRESS,
                         "fieldNumber": 7
+                    },
+                    "rewardsPerLiquidityLast": {
+                        "dataType": "byte",
+                        "maxLength": MAX_NUM_BYTES_Q96,
+                        "fieldNumber": 8
                     }
                 }
             }
         },
-        "settingsSubstore": {
+        "dexGlobalDataSubstore": {
             "type": "object",
-            "fieldNumber": 5,
+            "fieldNumber": 4,
             "required": [
-            "protocolFeeAddress",
-            "protocolFeePart",
-            "validatorsLSKRewardsPart",
-            "poolCreationSettings"
+                "positionCounter",
+                "poolCreationSettings",
+                "incentivizedPools",
+                "totalIncentivesMultiplier"
             ],
             "properties": {
-                "protocolFeeAddress": {
-                    "dataType": "bytes",
-                    "length": NUM_BYTES_ADDRESS,
+                "positionCounter": {
+                    "dataType": "uint64",
                     "fieldNumber": 1
-                },
-                "protocolFeePart": {
-                    "dataType": "uint32",
-                    "fieldNumber": 2
-                },
-                "validatorsLSKRewardsPart": {
-                    "dataType": "uint32",
-                    "fieldNumber": 3
                 },
                 "poolCreationSettings": {
                     "type": "array",
-                    "fieldNumber": 4,
+                    "fieldNumber": 2,
                     "items": {
                         "type": "object",
                         "required": ["feeTier", "tickSpacing"],
@@ -1319,14 +1340,37 @@ genesisDEXSchema = {
                             }
                         }
                     }
+                },
+                "incentivizedPools": {
+                    "type": "array",
+                    "fieldNumber": 3,
+                    "items": {
+                        "type": "object",
+                        "required": ["poolId", "multiplier"],
+                        "properties": {
+                            "poolId": {
+                                "dataType": "bytes",
+                                "length": NUM_BYTES_POOL_ID,
+                                "fieldNumber": 1
+                            },
+                            "multiplier": {
+                                "dataType": "uint32",
+                                "fieldNumber": 2
+                            }
+                        }
+                    }
+                },
+                "totalIncentivesMultiplier": {
+                    "dataType": "uint32",
+                    "fieldNumber": 4
                 }
             }
         }
     }
 }
 ```
-#### Genesis State Initialization
-During the genesis state initialization stage, the following steps are executed. If any step fails, the block is discarded and has no further effect.
+#### Genesis State Verification
+During the genesis state verification stage, the following steps are executed. If any step fails, the block is discarded and has no further effect.
 
 Let `genesisBlockAssetBytes` be the data bytes included in the block assets for the DEX module and let `genesisBlockAssetObject` be the deserialization of `genesisBlockAssetBytes` according to the `genesisDEXSchema`, given above.
 
@@ -1335,12 +1379,14 @@ Let `genesisBlockAssetBytes` be the data bytes included in the block assets for 
     - Across all elements of the `poolSubstore` array, all elements have unique `poolId`.
     - Across all elements of the `priceTickSubstore` array, all elements have unique `tickId`.
     - Across all elements of the `positionSubstore` array, all elements have unique `positionId`.
+    - Across all elements of the `dexGlobalDataSubstore.incentivizedPools` array, all elements have unique `poolId`. Additionally, check that all entries in `dexGlobalDataSubstore.incentivizedPools` are sorted with respect to `poolId` in ascending order.
 
 - Check tick range:
     - For every element of `positionSubstore` array check that `tickLower >= MIN_TICK`, `tickUpper <= MAX_TICK` and `tickLower <= tickUpper`.
-- Check pool existence for ticks and positions:
+- Check pool existence for ticks, positions and the incentivized pool list:
     - For every element of `priceTickSubstore`, let `poolId = tickId[:NUM_BYTES_POOL_ID]`. Check that array `poolSubstore` has an element with the same `poolId`.
     - For every element of `positionSubstore`, let `poolId = tickId[:NUM_BYTES_POOL_ID]`. Check that array `poolSubstore` has an element with the same `poolId`.
+    - For every element `pool` of `dexGlobalDataSubstore.incentivizedPools`, check that array `poolSubstore` has an element with `poolId == pool.poolId`.
 - Check tick spacings:
     - For each element `priceTick` of `priceTickSubstore` the following should return `True`:
 
@@ -1372,18 +1418,12 @@ Let `genesisBlockAssetBytes` be the data bytes included in the block assets for 
             position.tickUpper == initializedTickUpper)
     ```
 - Check fee proportion:
-    - The values `settingsSubstore.protocolFeePart` and `validatorsLSKRewardsPart` are not greater than 10^6.
-    - For each element of `settingsSubstore.poolCreationSettings` the value of `feeTier` is not greater than 10^6.
+    - For each element of `dexGlobalDataSubstore.poolCreationSettings` the value of `feeTier` is not greater than 10^6.
 
-- Create an entry in the DEX global state substore with:
-```python
-state = genesisBlockAssetObject.stateSubstore
-storeKey = empty bytes
-storeValue = {
-"positionCounter": state.positionCounter,
-"collectableLSKFees": state.collectableLSKFees
-} serialized using dexGlobalStateSchema
-```
+- Check total incentivized pool multiplier: `dexGlobalDataSubstore.totalIncentivesMultiplier` equals to sum of `pool.multiplier` for each `pool` in `dexGlobalDataSubstore.incentivizedPools`.
+
+#### Genesis State Initialization
+
 - For each entry `pool` in `genesisBlockAssetObject.poolSubstore`, create an entry in the pools substore with:
 
 ```python
@@ -1391,6 +1431,8 @@ storeKey = pool.poolId
 storeValue = {
     "liquidity": pool.liquidity,
     "sqrtPrice": pool.sqrtPrice,
+    "rewardsPerLiquidityAccumulator": pool.rewardsPerLiquidityAccumulator,
+    "heightRewardsUpdate": pool.heightRewardsUpdate,
     "feeGrowthGlobal0": pool.feeGrowthGlobal0,
     "feeGrowthGlobal1": pool.feeGrowthGlobal1,
     "tickSpacing": pool.tickSpacing
@@ -1405,7 +1447,8 @@ storeValue = {
     "liquidityNet": priceTick.liquidityNet,
     "liquidityGross": priceTick.liquidityGross,
     "feeGrowthOutside0": priceTick.feeGrowthOutside0,
-    "feeGrowthOutside1": priceTick.feeGrowthOutside1
+    "feeGrowthOutside1": priceTick.feeGrowthOutside1,
+    "rewardsPerLiquidityOutside": priceTick.rewardsPerLiquidityOutside
 } serialized using priceTickSchema
 ```
 
@@ -1419,23 +1462,25 @@ storeValue = {
     "liquidity": position.liquidity,
     "feeGrowthInsideLast0": position.feeGrowthInsideLast0,
     "feeGrowthInsideLast1": position.feeGrowthInsideLast1,
-    "ownerAddress": position.ownerAddress
+    "ownerAddress": position.ownerAddress,
+    "rewardsPerLiquidityLast": position.rewardsPerLiquidityLast
 } serialized using positionSchema
 ```
 
-- Create an entry in the protocol settings substore with:
+- Create an entry in the DEX global data substore with:
 
 ```python
-settings = genesisBlockAssetObject.settingsSubstore
+dexGlobalData = genesisBlockAssetObject.dexGlobalDataSubstore
 storeKey = empty bytes
 storeValue = {
-    "protocolFeeAddress": settings.protocolFeeAddress,
-    "protocolFeePart": settings.protocolFeePart,
-    "validatorsLSKRewardsPart": settings.validatorsLSKRewardsPart,
+    "positionCounter": dexGlobalData.positionCounter,
     "poolCreationSettings": [{"feeTier": poolCreationSettings.feeTier,
         "tickSpacing": poolCreationSettings.tickSpacing
-        } for each poolCreationSettings in settings.poolCreationSettings]
-} serialized using settingsSchema
+        } for each poolCreationSettings in dexGlobalData.poolCreationSettings],
+    "incentivizedPools": [{"poolId": pool.poolId, "multiplier": pool.multiplier} for
+        each pool in dexGlobalData.incentivizedPools],
+    "totalIncentivesMultiplier": dexGlobalData.totalIncentivesMultiplier
+} serialized using globalDataSchema
 ```
 
 #### Genesis State Finalization
