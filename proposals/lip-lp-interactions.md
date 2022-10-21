@@ -412,9 +412,9 @@ The name of the event is `EVENT_NAME_POSITION_UDPATED`.
 ```java
 positionUpdatedEventDataSchema = {
     "type": "object",
-    "required":  ["senderAddres", "positionID", "amount0", "tokenID0", "amount1", "tokenID1"],
+    "required":  ["senderAddress", "positionID", "amount0", "tokenID0", "amount1", "tokenID1"],
     "properties": {
-        "senderAddres": {
+        "senderAddress": {
             "dataType": "bytes",
             "fieldNumber": 1
         },
@@ -555,7 +555,7 @@ createPoolSchema = {
 
 - `tokenID0`: The ID of one of the two tokens for which a pool is created.
 - `tokenID1`: The ID of one of the two tokens for which a pool is created.
-- `feeTier`: The fee tier of the pool that is to be created. Note that only the fee tiers given in the protocol settings store of the DEX module can be chosen.
+- `feeTier`: The fee tier of the pool that is to be created. Note that only the fee tiers given in the DEX global data store of the DEX module can be chosen.
 - `tickInitialPrice`: The tick value corresponding to the initial sqrt price set for the pool.
 - `initialPosition`: The initial position to be created together with the pool. Creating a pool always requires creating an initial position at the same time.
     - `tickLower`: The lower tick value of the position. Note that `tickLower % tickSpacing == 0` has to hold for the tick spacing corresponding to the fee tier of the pool.
@@ -636,7 +636,7 @@ def execute(trs: Transaction) -> None:
             moduleID = MODULE_ID_DEX,
             typeID = EVENT_NAME_POSITION_CREATION_FAILED,
             data = {
-                "senderAddres": senderAddress,
+                "senderAddress": senderAddress,
                 "poolID": poolID,
                 "tickLower": initialPosition.tickLower,
                 "tickUpper":  initialPosition.tickUpper,
@@ -647,6 +647,7 @@ def execute(trs: Transaction) -> None:
         raise Exception()
 
     # add liquidity to position
+    currentHeight = height of the block containing trs
     tickLowerSqrtPrice = tickToPrice(initialPosition.tickLower)
     tickUpperSqrtPrice = tickToPrice(initialPosition.tickUpper)
     liquidity = getLiquidityForAmounts(initialSqrtPrice,
@@ -654,7 +655,7 @@ def execute(trs: Transaction) -> None:
                                        tickUpperSqrtPrice,
                                        initialPosition.amount0Desired,
                                        initialPosition.amount1Desired)
-    (amount0, amount1) = updatePosition(positionID, liquidity)
+    (amount0, amount1) = updatePosition(positionID, liquidity, currentHeight)
 
     # require liquidity to be added in both tokens
     if amount0 == 0 or amount1 == 0:
@@ -680,7 +681,7 @@ def execute(trs: Transaction) -> None:
         raise Exception()
 
     # deduct pool creation fee
-    transferToValidatorLSKPool(senderAddress, TOKEN_ID_FEE_DEX, POOL_CREATION_FEE)
+    transferToValidatorLSKPool(senderAddress, POOL_CREATION_FEE)
 
     # emit event about the successful position creation detailing the exact amounts added to the position
     emitEvent(
@@ -809,7 +810,8 @@ def execute(trs: Transaction) -> None:
         raise Exception()
 
     # add liquidity to position                                
-    currentSqrtPrice = pools[trs.params.poolID].sqrtPrice
+    currentHeight = height of the block containing trs
+    currentSqrtPrice = bytesToQ96(pools[trs.params.poolID].sqrtPrice)
     tickLowerSqrtPrice = tickToPrice(trs.params.tickLower)
     tickUpperSqrtPrice = tickToPrice(trs.params.tickUpper)
     liquidity = getLiquidityForAmounts(currentSqrtPrice,
@@ -817,7 +819,7 @@ def execute(trs: Transaction) -> None:
                                        tickUpperSqrtPrice,
                                        trs.params.amount0Desired,
                                        trs.params.amount1Desired)
-    (amount0, amount1) = updatePosition(positionID, liquidity)
+    (amount0, amount1) = updatePosition(positionID, liquidity, currentHeight)
 
     # check that amounts are within desired range (no large price slippage occurred)
     if amount0 < trs.params.amount0Min or amount1 < trs.params.amount1Min:
@@ -843,7 +845,7 @@ def execute(trs: Transaction) -> None:
         raise Exception()
 
     # deduct position creation fee
-    transferToValidatorLSKPool(senderAddress, TOKEN_ID_FEE_DEX, POSITION_CREATION_FEE)
+    transferToValidatorLSKPool(senderAddress, POSITION_CREATION_FEE)
 
     # emit event about the successful position creation detailing the exact amounts added to the position
     emitEvent(
@@ -943,7 +945,7 @@ def execute(trs: Transaction) -> None:
 
     # note that if a position exists, then a corresponding pool must exist
     poolID = getPoolIDFromPositionID(trs.params.positionID)
-    currentSqrtPrice = pools[poolID].sqrtPrice
+    currentSqrtPrice = bytesToQ96(pools[poolID].sqrtPrice)
     positionInfo = positions[positionID]
     tickLowerSqrtPrice = tickToPrice(positionInfo.tickLower)
     tickUpperSqrtPrice = tickToPrice(positionInfo.tickUpper)
@@ -952,12 +954,13 @@ def execute(trs: Transaction) -> None:
     tokenID1 = getToken1Id(poolID)
 
     # add liquidity to position   
+    currentHeight = height of the block containing trs
     liquidity = getLiquidityForAmounts(currentSqrtPrice,
                                        tickLowerSqrtPrice,
                                        tickUpperSqrtPrice,
                                        trs.params.amount0Desired,
                                        trs.params.amount1Desired)
-    (amount0, amount1) = updatePosition(trs.params.positionID, liquidity)
+    (amount0, amount1) = updatePosition(trs.params.positionID, liquidity, currentHeight)
 
     # check that amounts are within desired range (no large price slippage occurred)
     if amount0 < trs.params.amount0Min or amount1 < trs.params.amount1Min:
@@ -987,7 +990,7 @@ def execute(trs: Transaction) -> None:
         moduleID = MODULE_ID_DEX,
         typeID = EVENT_NAME_POSITION_UDPATED,
         data = {
-            "senderAddres": senderAddress,
+            "senderAddress": senderAddress,
             "positionID": positionID,
             "amount0": amount0,
             "tokenID0": tokenID0,
@@ -1066,7 +1069,8 @@ def verify(trs: Transaction) -> None:
 def execute(trs: Transaction) -> None:
     senderAddress = address derived from trs.senderPublicKey
     checkPositionExistenceAndOwnership(senderAddress, trs.params.positionID)
-    (amount0, amount1) = updatePosition(trs.params.positionID, -trs.params.liquidityToRemove)
+    currentHeight = height of the block containing trs
+    (amount0, amount1) = updatePosition(trs.params.positionID, -trs.params.liquidityToRemove, currentHeight)
     poolID = getPoolIDFromPositionID(trs.params.positionID)
     tokenID0 = getToken0Id(poolID)
     tokenID1 = getToken1Id(poolID)
@@ -1094,7 +1098,7 @@ def execute(trs: Transaction) -> None:
         moduleID = MODULE_ID_DEX,
         typeID = EVENT_NAME_POSITION_UDPATED,
         data = {
-            "senderAddres": senderAddress,
+            "senderAddress": senderAddress,
             "positionID": positionID,
             "amount0": -amount0,
             "tokenID0": tokenID0,
@@ -1155,9 +1159,10 @@ def verify(trs: Transaction) -> None:
 ```python
 def execute(trs: Transaction) -> None:
     senderAddress = address derived from trs.senderPublicKey
+    currentHeight = height of the block containing trs
     for positionID in trs.params.positions
         checkPositionExistenceAndOwnership(senderAddress, positionID)
-        collectFeesAndIncentives(positionID)
+        collectFeesAndIncentives(positionID, currentHeight)
 ```
 
 ### Internal Functions
@@ -1168,7 +1173,7 @@ This function checks that the position with the provided position ID exists and 
 If this is not the case, a persistent event is emitted and an exception is raised.
 
 ```python
-checkPositionExistenceAndOwnership(senderAddres: Address, positionID: PositionID) -> None:
+checkPositionExistenceAndOwnership(senderAddress: Address, positionID: PositionID) -> None:
     # check position existence
     if trs.params.positionID does not exist in Positions substore:
         emitPersistentEvent(
@@ -1208,7 +1213,7 @@ This function computes the share of fees and liquidity provider incentives earne
 Both fees and incentives are transferred to the position owner.
 
 ```python
-def collectFeesAndIncentives(positionID: PositionID) -> None:
+def collectFeesAndIncentives(positionID: PositionID, currentHeight: int) -> None:
     poolID = getPoolIDFromPositionID(positionID)
     positionInfo = position(positionID)
     ownerAddress = getOwnerAddressOfPosition(positionID)
@@ -1220,16 +1225,20 @@ def collectFeesAndIncentives(positionID: PositionID) -> None:
         transferFromPool(poolID, ownerAddress, getToken0Id(poolID), collectableFees0)
     if collectableFees1 > 0:
         transferFromPool(poolID, ownerAddress, getToken1Id(poolID), collectableFees1)
-    positionInfo.feeGrowthInsideLast0 = feeGrowthInside0
-    positionInfo.feeGrowthInsideLast1 = feeGrowthInside1
-    position(positionID) = positionInfo
+    positionInfo.feeGrowthInsideLast0 = q96ToBytes(feeGrowthInside0)
+    positionInfo.feeGrowthInsideLast1 = q96ToBytes(feeGrowthInside1)
 
     # compute collectable incentives
-    (collectableFeesLSK, incentivesForPosition) = computeCollectableIncentives(positionID, collectableFees0, collectableFees1)
+    # update pool rewards at the current liquidity before withdrawing
+    updatePoolRewards(poolID, currentHeight)
+    rewardsAccumulatorQ96 = bytesToQ96(pools[poolID].rewardsPerLiquidityAccumulator)
+    (collectableIncentives, rewardsPerLiquidityInside) = computeCollectableIncentives(positionID, rewardsAccumulatorQ96)
 
-    # transfer incentives and update collectable LSK fees accordingly
-    Token.transfer(ADDRESS_LIQUIDITY_PROVIDERS_REWARDS_POOL, ownerAddress, TOKEN_ID_REWARDS, incentivesForPosition)
-    dexGlobalState.collectableLSKFees = dexGlobalState.collectableLSKFees - collectableFeesLSK
+    # transfer incentives and update position information accordingly
+    Token.unlock(ADDRESS_LIQUIDITY_PROVIDERS_REWARDS_POOL, MODULE_NAME_DEX, TOKEN_ID_REWARDS, collectableIncentives)
+    Token.transfer(ADDRESS_LIQUIDITY_PROVIDERS_REWARDS_POOL, ownerAddress, TOKEN_ID_REWARDS, collectableIncentives)
+    positionInfo.rewardsPerLiquidityLast = q96ToBytes(rewardsPerLiquidityInside)
+    position(positionID) = positionInfo
 
     # emit an event providing information about the collected fees and incentives
     emitEvent(
@@ -1242,7 +1251,7 @@ def collectFeesAndIncentives(positionID: PositionID) -> None:
             "tokenID0": getToken0Id(poolID),
             "collectedFees1": collectableFees1,
             "tokenID1": getToken1Id(poolID),
-            "collectedIncentives": incentivesForPosition,
+            "collectedIncentives": collectableIncentives,
             "tokenIDIncentives": TOKEN_ID_REWARDS
         },
         topics = [
@@ -1282,49 +1291,58 @@ def computeCollectableFees(positionID: PositionID) -> Tuple[uint64, uint64, Q96,
     # calculate collected fees
     # note that collectableFees0 and collectableFees1 are uint64 integers and the collected fees may be smaller
     # than the smallest token unit and therefore be rounded down to 0
-    collectableFees0 = roundDown_96(mul_96(sub_96(feeGrowthInside0, positionInfo.feeGrowthInsideLast0), positionInfo.liquidity))
-    collectableFees1 = roundDown_96(mul_96(sub_96(feeGrowthInside1, positionInfo.feeGrowthInsideLast1), positionInfo.liquidity))
+    collectableFees0 = roundDown_96(mul_96(sub_96(feeGrowthInside0, bytesToQ96(positionInfo.feeGrowthInsideLast0)), Q96(positionInfo.liquidity)))
+    collectableFees1 = roundDown_96(mul_96(sub_96(feeGrowthInside1, bytesToQ96(positionInfo.feeGrowthInsideLast1)), Q96(positionInfo.liquidity)))
 
     return (collectableFees0, collectableFees1, feeGrowthInside0, feeGrowthInside1)
 ```
 
 
-#### computeLiquidityProviderIncentives
+#### computeCollectableIncentives
 
-Given a position and the fees that are collectable for this position, this function computes the additional liquidity provider incentives for the position owner.
+Given a position, this function computes the additional liquidity provider incentives for the position owner. The function allows to compute incentives for a particular value of rewards per liquidity accumulator in the pool containing the given position.
 
 ##### Parameters
 
 * `positionID`: The ID of the position for which to collect the fees.
-* `collectableFees0`: The amount of fees in `token0` collected by the position owner.
-* `collectableFees1`: The amount of fees in `token1` collected by the position owner.
+* `rewardsPerLiquidityAccumulator`: The Q96 value of rewards per liquidity accumulator in the pool containing the position.
 
 ##### Returns
 
-A tuple `(collectableFeesLSK, incentivesForPosition)` where
+A tuple `(collectableIncentives, rewardsPerLiquidityInside)` where
 
-* `collectableFeesLSK`: The amount of fees in LSK that can be collected.
-* `incentivesForPosition`: The amount of liquidity provider incentives in `TOKEN_ID_REWARDS`.
+* `collectableIncentives`: The amount of liquidity provider incentives to be collected in `TOKEN_ID_REWARDS`.
+* `rewardsPerLiquidityInside`: The current position rewards given per unit of liquidity.
 
 ##### Execution
 
 ```python
-def computeCollectableIncentives(positionID: PositionID, collectableFees0: uint64, collectableFees1: uint64) -> uint64:
+def computeCollectableIncentives(positionID: PositionID, rewardsPerLiquidityAccumulator: Q96) -> Tuple[uint64, Q96]:
+    positionInfo = positions[positionID]
     poolID = getPoolIDFromPositionID(positionID)
-    collectableFeesLSK = 0
-    if getToken0Id(poolID) == TOKEN_ID_LSK:
-        collectableFeesLSK = collectableFees0
-    elif getToken1Id(poolID) == TOKEN_ID_LSK:
-        collectableFeesLSK = collectableFees1
 
-    if collectableFeesLSK == 0:
-        return (0,0)
+    poolInfo = pools[poolID]
+    tickLower = positionInfo.tickLower
+    tickUpper = positionInfo.tickUpper
+    tickCurrent = priceToTick(bytesToQ96(poolInfo.sqrtPrice))
+    lowerTickInfo = ticks(poolID, tickLower)
+    upperTickInfo = ticks(poolID, tickUpper)
 
-    # compute LP incentives
-    totalCollectableLSKFees = dexGlobalState.collectableLSKFees
-    availableLPIncentives = Token.getAvailableBalance(ADDRESS_LIQUIDITY_PROVIDERS_REWARDS_POOL, TOKEN_ID_REWARDS)
-    incentivesForPosition = (availableLPIncentives * collectableFeesLSK) // totalCollectableLSKFees
-    return (collectableFeesLSK, incentivesForPosition)
+    # compute rewards per liquidity below
+    if tickCurrent >= tickLower:
+        rewardsPLBelow = bytesToQ96(lowerTickInfo.rewardsPerLiquidityOutside)
+    else:
+        rewardsPLBelow = sub_96(rewardsPerLiquidityAccumulator, bytesToQ96(lowerTickInfo.rewardsPerLiquidityOutside))
+    # compute rewards per liquidity above
+    if tickCurrent < tickUpper:
+        rewardsPLAbove = bytesToQ96(upperTickInfo.rewardsPerLiquidityOutside)
+    else:
+        rewardsPLAbove = sub_96(rewardsPerLiquidityAccumulator, bytesToQ96(upperTickInfo.rewardsPerLiquidityOutside))
+
+    rewardsPerLiquidityInside = sub_96(sub_96(rewardsPerLiquidityAccumulator, rewardsPLBelow), rewardsPLAbove)
+    collectableRewardsPL = sub_96(rewardsPerLiquidityInside, bytesToQ96(positionInfo.rewardsPerLiquidityLast))
+    collectableIncentives = roundDown_96(mul_96(collectableRewardsPL, Q96(positionInfo.liquidity)))
+    return (collectableIncentives, rewardsPerLiquidityInside)
 ```
 
 
@@ -1358,9 +1376,9 @@ This internal function is used to create a new liquidity pool with the provided 
 ```python
 def createPool(tokenID0: TokenID, tokenID1: TokenID, feeTier: uint32, initialSqrtPrice: Q96) -> uint32:
     # check validity of input parameters
-    if there is no entry s in settings.poolCreationSettings with s.feeTier == feeTier:
+    if there is no entry s in dexGlobalData.poolCreationSettings with s.feeTier == feeTier:
         return POOL_CREATION_FAILED_INVALID_FEE_TIER
-    poolSetting = entry s in settings.poolCreationSettings with s.feeTier == feeTier
+    poolSetting = entry s in dexGlobalData.poolCreationSettings with s.feeTier == feeTier
 
     poolID = computePoolID(tokenID0, tokenID1, feeTier)
     # check if pool already exists
@@ -1370,10 +1388,9 @@ def createPool(tokenID0: TokenID, tokenID1: TokenID, feeTier: uint32, initialSqr
     poolStoreValue = {
         "liquidity": 0,
         "sqrtPrice": initialSqrtPrice,
-        "feeGrowthGlobal0": Q96(0),
-        "feeGrowthGlobal1": Q96(0),
-        "protocolFees0": Q96(0),
-        "protocolFees1": Q96(0),
+        "rewardsPerLiquidityAccumulator": q96ToBytes(Q96(0)),
+        "feeGrowthGlobal0": q96ToBytes(Q96(0)),
+        "feeGrowthGlobal1": q96ToBytes(Q96(0)),
         "tickSpacing": poolSetting.tickSpacing
     }
     pools[poolID] = encode(poolsSchema, poolStoreValue)
@@ -1424,12 +1441,14 @@ def createPosition(senderAddress: Address, poolID: PoolID, tickLower: uint32, ti
         tickStoreValue = {
            "liquidityNet": 0,
            "liquidityGross": 0,
-           "feeGrowthOutside0": Q96(0),
-           "feeGrowthOutside1": Q96(0)
+           "feeGrowthOutside0": q96ToBytes(Q96(0)),
+           "feeGrowthOutside1": q96ToBytes(Q96(0)),
+           "rewardsPerLiquidityOutside": q96ToBytes(Q96(0))
         }
-        if currentPool.sqrtPrice >= tickToPrice(tickLower):
+        if bytesToQ96(currentPool.sqrtPrice) >= tickToPrice(tickLower):
             tickStoreValue.feeGrowthOutside0 = currentPool.feeGrowthGlobal0
             tickStoreValue.feeGrowthOutside1 = currentPool.feeGrowthGlobal1
+            tickStoreValue.rewardsPerLiquidityOutside = currentPool.rewardsPerLiquidityAccumulator
 
         ticks(poolID, tickLower) = encode(priceTickSchema, tickStoreValue)
 
@@ -1438,12 +1457,14 @@ def createPosition(senderAddress: Address, poolID: PoolID, tickLower: uint32, ti
         tickStoreValue = {
             "liquidityNet": 0,
             "liquidityGross": 0,
-            "feeGrowthOutside0": Q96(0),
-            "feeGrowthOutside1": Q96(0)
+            "feeGrowthOutside0": q96ToBytes(Q96(0)),
+            "feeGrowthOutside1": q96ToBytes(Q96(0)),
+            "rewardsPerLiquidityOutside": q96ToBytes(Q96(0))
         }
-        if currentPool.sqrtPrice >= tickToPrice(tickUpper):
+        if bytesToQ96(currentPool.sqrtPrice) >= tickToPrice(tickUpper):
             tickStoreValue.feeGrowthOutside0 = currentPool.feeGrowthGlobal0
             tickStoreValue.feeGrowthOutside1 = currentPool.feeGrowthGlobal1
+            tickStoreValue.rewardsPerLiquidityOutside = currentPool.rewardsPerLiquidityAccumulator
 
         ticks(poolID, tickUpper) = encode(priceTickSchema, tickStoreValue)
 
@@ -1453,9 +1474,10 @@ def createPosition(senderAddress: Address, poolID: PoolID, tickLower: uint32, ti
         "tickLower": tickLower,
         "tickUpper": tickUpper,
         "liquidity": 0,
-        "feeGrowthInsideLast0": Q96(0),
-        "feeGrowthInsideLast1": Q96(0),
-        "ownerAddress": senderAddress
+        "feeGrowthInsideLast0": q96ToBytes(Q96(0)),
+        "feeGrowthInsideLast1": q96ToBytes(Q96(0)),
+        "ownerAddress": senderAddress,
+        "rewardsPerLiquidityLast": q96ToBytes(Q96(0))
     }
     positions[positionID] = encode(positionSchema, positionValue)
     return (POSITION_CREATION_SUCCESS, positionID)
@@ -1485,28 +1507,28 @@ def getFeeGrowthInside(positionID: PositionID) -> Tuple[Q96, Q96]:
 
     tickLower = positionInfo.tickLower
     tickUpper = positionInfo.tickUpper
-    tickCurrent = priceToTick(poolInfo.sqrtPrice)
+    tickCurrent = priceToTick(bytesToQ96(poolInfo.sqrtPrice))
     lowerTickInfo = ticks(poolID, tickLower)
     upperTickInfo = ticks(poolID, tickUpper)
 
     # compute the fee growth below
     if tickCurrent >= tickLower:
-        feeGrowthBelow0 = lowerTickInfo.feeGrowthOutside0
-        feeGrowthBelow1 = lowerTickInfo.feeGrowthOutside1
+        feeGrowthBelow0 = bytesToQ96(lowerTickInfo.feeGrowthOutside0)
+        feeGrowthBelow1 = bytesToQ96(lowerTickInfo.feeGrowthOutside1)
     else:
-        feeGrowthBelow0 = sub_96(poolInfo.feeGrowthGlobal0, lowerTickInfo.feeGrowthOutside0)
-        feeGrowthBelow1 = sub_96(poolInfo.feeGrowthGlobal1, lowerTickInfo.feeGrowthOutside1)
+        feeGrowthBelow0 = sub_96(bytesToQ96(poolInfo.feeGrowthGlobal0), bytesToQ96(lowerTickInfo.feeGrowthOutside0))
+        feeGrowthBelow1 = sub_96(bytesToQ96(poolInfo.feeGrowthGlobal1), bytesToQ96(lowerTickInfo.feeGrowthOutside1))
 
     # compute the fee growth above
     if tickCurrent < tickUpper:
-        feeGrowthAbove0 = upperTickInfo.feeGrowthOutside0
-        feeGrowthAbove1 = upperTickInfo.feeGrowthOutside1
+        feeGrowthAbove0 = bytesToQ96(upperTickInfo.feeGrowthOutside0)
+        feeGrowthAbove1 = bytesToQ96(upperTickInfo.feeGrowthOutside1)
     else:
-        feeGrowthAbove0 = sub_96(poolInfo.feeGrowthGlobal0, upperTickInfo.feeGrowthOutside0)
-        feeGrowthAbove1 = sub_96(poolInfo.feeGrowthGlobal1, upperTickInfo.feeGrowthOutside1)
+        feeGrowthAbove0 = sub_96(bytesToQ96(poolInfo.feeGrowthGlobal0), bytesToQ96(upperTickInfo.feeGrowthOutside0))
+        feeGrowthAbove1 = sub_96(bytesToQ96(poolInfo.feeGrowthGlobal1), bytesToQ96(upperTickInfo.feeGrowthOutside1))
 
-    feeGrowthInside0 = sub_96(sub_96(poolInfo.feeGrowthGlobal0, feeGrowthBelow0), feeGrowthAbove0)
-    feeGrowthInside1 = sub_96(sub_96(poolInfo.feeGrowthGlobal1, feeGrowthBelow1), feeGrowthAbove1)
+    feeGrowthInside0 = sub_96(sub_96(bytesToQ96(poolInfo.feeGrowthGlobal0), feeGrowthBelow0), feeGrowthAbove0)
+    feeGrowthInside1 = sub_96(sub_96(bytesToQ96(poolInfo.feeGrowthGlobal1), feeGrowthBelow1), feeGrowthAbove1)
     return (feeGrowthInside0, feeGrowthInside1)
 ```
 
@@ -1574,8 +1596,8 @@ This function allows to get the position ID of a newly created position.
 
 ```python
 getNewPositionID(poolID: PoolID, ownerAddress: Address) -> PositionID:
-    positionIndex = dexGlobalState.positionCounter
-    dexGlobalState.positionCounter = dexGlobalState.positionCounter +1
+    positionIndex = dexGlobalData.positionCounter
+    dexGlobalData.positionCounter = dexGlobalData.positionCounter +1
 
     #nftID = NFT.create(senderAddress, NFT_COLLECTION_DEX, empty byte array)
     #positionID = poolID || uint64be(nftID.index)
@@ -1608,6 +1630,8 @@ The function is similar to the function [_modifyPosition](https://github.com/Uni
 
 * `positionID`: The ID of the position that is supposed to be updated.
 * `liquidityDelta`: The change of liquidity, i.e., a positive integer if liquidity is added and a negative integer if liquidity is supposed to be removed.
+* `currentHeight`: An integer with the height of the block when the swap is performed, is needed for correct reward computation.
+
 
 ##### Returns
 
@@ -1617,7 +1641,7 @@ Analogously, `amount1` is the amount of `token1` added or removed from the posit
 ##### Execution
 
 ```python
-def updatePosition(positionID: PositionID, liquidityDelta: int64) -> Tuple[uint64, uint64]:
+def updatePosition(positionID: PositionID, liquidityDelta: int64, currentHeight: int) -> Tuple[uint64, uint64]:
     # check validity of input parameters
     positionInfo = positions[positionID]
     if -liquidityDelta > positionInfo.liquidity:
@@ -1637,7 +1661,7 @@ def updatePosition(positionID: PositionID, liquidityDelta: int64) -> Tuple[uint6
         raise Exception()
 
     # collect the fees and update the position accordingly
-    collectFeesAndIncentives(positionID)
+    collectFeesAndIncentives(positionID, currentHeight)
 
     # check that we are actually updating the position not only collecting fees
     if liquidityDelta == 0:
@@ -1652,17 +1676,18 @@ def updatePosition(positionID: PositionID, liquidityDelta: int64) -> Tuple[uint6
     upperTickInfo = ticks(poolID, positionInfo.tickUpper)
     sqrtPriceLow = tickToPrice(positionInfo.tickLower)
     sqrtPriceUp = tickToPrice(positionInfo.tickUpper)
+    sqrtPrice = bytesToQ96(poolInfo.sqrtPrice)
 
     # if liquidity is added, we need to round up so that we ensure that at least the required amount of token is added
     # if liquidity is removed, we need to round down so that we ensure that at most the required amount of token is removed
     roundUp = liquidityDelta > 0
 
-    if poolInfo.sqrtPrice <= sqrtPriceLow:
+    if sqrtPrice <= sqrtPriceLow:
         amount0 = getAmount0Delta(sqrtPriceLow, sqrtPriceUp, abs(liquidityDelta), roundUp)
         amount1 = 0
-    elif sqrtPriceLow < poolInfo.sqrtPrice and  poolInfo.sqrtPrice < sqrtPriceUp:
-        amount0 = getAmount0Delta(poolInfo.sqrtPrice, sqrtPriceUp, abs(liquidityDelta), roundUp)
-        amount1 = getAmount1Delta(sqrtPriceLow, poolInfo.sqrtPrice, abs(liquidityDelta), roundUp)
+    elif sqrtPriceLow < sqrtPrice and  sqrtPrice < sqrtPriceUp:
+        amount0 = getAmount0Delta(sqrtPrice, sqrtPriceUp, abs(liquidityDelta), roundUp)
+        amount1 = getAmount1Delta(sqrtPriceLow, sqrtPrice, abs(liquidityDelta), roundUp)
     else: # sqrtPriceUp < poolInfo.sqrtPrice
         amount0 = 0
         amount1 = getAmount1Delta(sqrtPriceLow, sqrtPriceUp, abs(liquidityDelta), roundUp)
@@ -1677,7 +1702,7 @@ def updatePosition(positionID: PositionID, liquidityDelta: int64) -> Tuple[uint6
         transferFromPool(poolID, ownerAddress, getToken1Id(poolID), amount1)
 
     # update the pool entry if sqrtPrice is in the price range
-    if sqrtPriceLow <= poolInfo.sqrtPrice and poolInfo.sqrtPrice < sqrtPriceUp:
+    if sqrtPriceLow <= sqrtPrice and sqrtPrice < sqrtPriceUp:
         poolInfo.liquidity += liquidityDelta
         pools[poolID] = poolInfo
 
@@ -1734,11 +1759,15 @@ A tuple `(collectableFees0, collectableFees1, collectableIncentives)` where
 ```python
 getCollectableFeesAndIncentives(positionID: PositionID) -> Tuple[uint64, uint64, uint64]:
     # check validity of input parameters
-    if positionID not in Positions substore:
+    if positionID not in positions:
        raise Exception()
 
     (collectableFees0, collectableFees1, feeGrowthInside0, feeGrowthInside1) = computeCollectableFees(positionID)
-    (collectableFeesLSK, collectableIncentives) = computeCollectableIncentives(positionID, collectableFees0, collectableFees1)
+
+    poolID = getPoolIDFromPositionID(positionID)
+    height = current height of the last block
+    updatedRewardsPerLiqiudity = computeNewRewardsPerLiquidity(poolID, height)
+    (collectableIncentives, rewardsPerLiquidityInside) = computeCollectableIncentives(positionID, updatedRewardsPerLiqiudity)
     return (collectableFees0, collectableFees1, collectableIncentives)
 ```
 
