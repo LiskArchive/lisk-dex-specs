@@ -125,7 +125,7 @@ We define the following constants:
 | `TOKEN_ID_REWARDS`        | bytes | TBD    | The token ID of the token used for liquidity provider, trader and validator incentives, as defined in the [DEX Rewards module](https://github.com/LiskHQ/lips-staging/blob/main/proposals/lip_introduce_DEX_Rewards_module.md).         |
 | `VALIDATORS_LSK_REWARD_PART`                    | `uint32` |  200000  | The portion of LSK swap fees that are paid to the validators, in parts-per-million.  |
 | **Token Module Constants**                |        |                  |                           |                            
-| `TOKEN_ID_LSK`              |  bytes |   `0x 00 00 00 00 00 00 00 00`           |    The token ID of the LSK token as defined in the [Token module LIP][tokenLIP].     |      
+| `TOKEN_ID_LSK`              |  bytes |   `0x 00 00 00 00 00 00 00 00`           |    The token ID of the LSK token as defined in the [Token module][tokenLIP].     |      
 | `NUM_BYTES_TOKEN_ID`                | `uint32` | 8                     | The number of bytes of a token ID.  |         
 | **DEX Module Store**                    |        |                  | |                                                       |
 | `SUBSTORE_PREFIX_POOL`                    | bytes  | 0x4000           | Substore prefix of the pools substore. |
@@ -509,6 +509,28 @@ def getToken1Id(poolId: PoolID) -> TokenID:
     return poolId[NUM_BYTES_TOKEN_ID : 2*NUM_BYTES_TOKEN_ID]
 ```
 
+#### getToken0Amount
+
+This function returns the amount of `token0` locked in a given pool. It uses the `getLockedAmount` function of the [Token module](https://github.com/LiskHQ/lips/blob/main/proposals/lip-0051.md).
+
+```python
+def getToken0Amount(poolId: PoolID) -> int:
+    address = poolIdToAddress(poolId)
+    tokenId = getToken0Id(poolId)
+    return Token.getLockedAmount(address, MODULE_NAME_DEX, tokenId)
+```
+
+#### getToken1Amount
+
+This function returns the amount of `token1` locked in a given pool. It uses the `getLockedAmount` function of the [Token module](https://github.com/LiskHQ/lips/blob/main/proposals/lip-0051.md).
+
+```python
+def getToken1Amount(poolId: PoolID) -> int:
+    address = poolIdToAddress(poolId)
+    tokenId = getToken1Id(poolId)
+    return Token.getLockedAmount(address, MODULE_NAME_DEX, tokenId)
+```
+
 #### getFeeTier
 
 This function returns the fee tier of a given pool given in units of parts-per-million of the swap amount.
@@ -863,6 +885,32 @@ def computeNextPrice(
     return nextSqrtPrice
 ```
 
+#### getCredibleDirectPrice
+
+For a pair of tokens, this function computes the most credible price of the first token in terms of the second via a direct swap pool. The most credible price is the price of a pool between the two tokens with the highest total value locked. The function raises an exception if there is no direct swap pool between two tokens.
+
+```python
+def getCredibleDirectPrice(token0: TokenID, token1: TokenID) -> Q96:
+    (token0, token1) = sort(token0, token1)
+    directPools = []
+    for setting in dexGlobalData.poolCreationSettings:
+        potentialPoolId = token0 + token1 + setting.feeTier.to_bytes(4, byteorder='big')
+        if potentialPoolId in pools:
+            directPools.add(potentialPoolId)
+    if directPools is empty:
+        raise Exception("No direct pool between given tokens")
+
+    token1ValuesLocked = []
+    for i in range length(directPools):
+        # compute the value locked in terms of token1, use pool price to account for token0
+        poolId = directPools[i]
+        token0ValueQ96 = mul_96(mul_96(Q96(getToken0Amount(poolId)), pools[poolId].sqrtPrice), pools[poolId].sqrtPrice)
+        token1ValuesLocked.add(roundDown_96(token0ValueQ96) + getToken1Amount(poolId))
+
+    let i be the index of maximal element in token1ValuesLocked
+    return mul_96(pools[directPools[i]].sqrtPrice, pools[directPools[i]].sqrtPrice)
+```
+
 ### Protocol Logic for Other Modules
 
 #### addPoolCreationSettings
@@ -1134,6 +1182,58 @@ def dryRunSwapExactOut(tokenIdIn: TokenID, maxAmountIn: int, tokenIdOut: TokenID
         raise Exception("Too high input amount")
     priceAfter = computeCurrentPrice(tokenIdIn, tokenIdOut, swapRoute)
     return (tokens[-1].amount, amountOut, priceBefore, priceAfter)
+```
+
+#### getLSKPrice
+
+The function returns a current price of a given token in terms of LSK token. It uses functions `computeRegularRoute` and `computeExceptionalRoute` defined in [the Appendix of swap interaction LIP](https://github.com/LiskHQ/lips-staging/blob/main/proposals/lip-swap_Interaction.md#computing-routes).
+
+This function assumes that the node maintains an up-to-date version of [pools graph](https://github.com/LiskHQ/lips-staging/blob/main/proposals/lip-swap_Interaction.md#pools-graph) in memory. Note that calling the `constructPoolsGraph` function every time in the `getLSKPrice` endpoint would be highly inefficient. The pools graph needs to be updated only when a new pool is created in DEX, thus most of the times it will not change between two calls of this endpoint.
+
+```python
+def getLSKPrice(tokenId: TokenID) -> Q96:
+    let poolsGraph be the pools graph from the memory of the node
+    route = computeRegularRoute(tokenId, TOKEN_ID_LSK, poolsGraph)
+    if route is empty:
+        route = computeExceptionalRoute(tokenId, TOKEN_ID_LSK, poolsGraph)
+    if route is empty:
+        raise Exception("No swap route between LSK and the given token")
+
+    price = Q96(1)
+    tokenIn = route[0]
+    for i in range(1, length(route)):
+        tokenOut = route[i]
+        credibleDirectPrice = getCredibleDirectPrice(tokenIn, tokenOut)
+        if tokenIn < tokenOut:
+            # tokenIn is token0, tokenOut is token1, credible direct price is tokenIn in terms of tokenOut
+            price = mul_96(price, credibleDirectPrice)
+        else:
+            # tokenIn is token1, tokenOut is token0, credible direct price is tokenOut in terms of tokenIn
+            price = div_96(price, credibleDirectPrice)
+        tokenIn = tokenOut
+    return price
+```
+
+#### getTVL
+
+The function returns the total value locked of a given pool in terms of LSK token. The TVL is computed as total amount of tokens in the pool multiplied by the current LSK price.
+
+```python
+def getTVL(poolId: PoolID) -> int:
+    if getToken0Id == TOKEN_ID_LSK:
+        # use internal price of the pool to compute the TVL in LSK
+        token1ValueQ96 = div_96(div_96(Q96(getToken1Amount(poolId)), pools[poolId].sqrtPrice), pools[poolId].sqrtPrice)
+        return roundDown_96(token1ValueQ96) + getToken0Amount(poolId)
+    if getToken1Id == TOKEN_ID_LSK:
+        # use internal price of the pool to compute the TVL in LSK
+        token0ValueQ96 = mul_96(mul_96(Q96(getToken0Amount(poolId)), pools[poolId].sqrtPrice), pools[poolId].sqrtPrice)
+        return roundDown_96(token0ValueQ96) + getToken1Amount(poolId)
+    # use the endpoint to get LSK price for each token
+    token0Id = getToken0Id(poolId)
+    token1Id = getToken1Id(poolId)
+    value0Q96 = mul_96(getLSKPrice(token0Id), Q96(getToken0Amount(poolId)))
+    value1Q96 = mul_96(getLSKPrice(token1Id), Q96(getToken1Amount(poolId)))
+    return roundDown_96(add_96(value0Q96, value1Q96))
 ```
 
 ### Genesis Block Processing
