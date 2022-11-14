@@ -745,8 +745,8 @@ def swap(poolId: PoolID,
         totalFeesOut += feeOut
 
         # compute liquidity providers fees
-        validatorFeePartIn = tokenIn == TOKEN_ID_LSK ? VALIDATORS_LSK_REWARD_PART : 0
-        validatorFeePartOut = tokenOut == TOKEN_ID_LSK ? VALIDATORS_LSK_REWARD_PART : 0
+        validatorFeePartIn = tokenIn == TOKEN_ID_LSK ? VALIDATORS_LSK_INCENTIVE_PART : 0
+        validatorFeePartOut = tokenOut == TOKEN_ID_LSK ? VALIDATORS_LSK_INCENTIVE_PART : 0
         liquidityFeeInQ96 = muldiv_96(Q96(feeIn), Q96(FEE_TIER_PARTITION - validatorFeePartIn), Q96(FEE_TIER_PARTITION))
         liquidityFeeOutQ96 = muldiv_96(Q96(feeOut), Q96(FEE_TIER_PARTITION - validatorFeePartOut), Q96(FEE_TIER_PARTITION))
 
@@ -853,8 +853,8 @@ The function crosses a tick either from left to right or from right to left by u
 ```python
 def crossTick(tickId: TickID, leftToRight: bool, currentHeight: int) -> None:
     poolId = tickId[:NUM_BYTES_POOL_ID]
-    # update pool rewards at the current liquidity
-    updatePoolRewards(poolId, currentHeight)
+    # update pool incentives at the current liquidity
+    updatePoolIncentives(poolId, currentHeight)
     # update liquidity
     if leftToRight:
         pools[poolId].liquidity += ticks(poolId, tickId).liquidityNet
@@ -868,25 +868,25 @@ def crossTick(tickId: TickID, leftToRight: bool, currentHeight: int) -> None:
     feeGrowthGlobal1Q96 = bytesToQ96(pools[poolId].feeGrowthGlobal1)
     feeGrowthOutside1Q96 = bytesToQ96(ticks(poolId, tickId).feeGrowthOutside1)
     ticks(poolId, tickId).feeGrowthOutside1 = q96ToBytes(sub_96(feeGrowthGlobal1Q96, feeGrowthOutside1Q96))
-    # update rewards per liquidity outside
-    rewardsAccumulatorQ96 = bytesToQ96(pools[poolId].rewardsPerLiquidityAccumulator)
-    rewardsOutsideQ96 = bytesToQ96(ticks(poolId, tickId).rewardsPerLiquidityOutside)
-    ticks(poolId, tickId).rewardsPerLiquidityOutside = q96ToBytes(sub_96(rewardsAccumulatorQ96, rewardsOutsideQ96))
+    # update incentives per liquidity outside
+    incentivesAccumulatorQ96 = bytesToQ96(pools[poolId].incentivesPerLiquidityAccumulator)
+    incentivesOutsideQ96 = bytesToQ96(ticks(poolId, tickId).incentivesPerLiquidityOutside)
+    ticks(poolId, tickId).incentivesPerLiquidityOutside = q96ToBytes(sub_96(incentivesAccumulatorQ96, incentivesOutsideQ96))
 ```
 
 #### transferFeesFromPool
 
-The function computes the correct amount of validator fees, transfers them from the given pool address to the validator rewards pool, and locks the transferred tokens.
+The function computes the correct amount of validator fees, transfers them from the given pool address to the validator incentives account, and locks the transferred tokens.
 
 ```python
 def transferFeesFromPool(amount: int, id: TokenID, pool: PoolID) -> None:
     validatorFee = 0
     if id == TOKEN_ID_LSK:
-        validatorFee = roundDown_96(muldiv_96(Q96(amount), Q96(VALIDATORS_LSK_REWARD_PART), Q96(FEE_TIER_PARTITION)))
+        validatorFee = roundDown_96(muldiv_96(Q96(amount), Q96(VALIDATORS_LSK_INCENTIVE_PART), Q96(FEE_TIER_PARTITION)))
 
     if validatorFee > 0:
-        transferFromPool(pool, ADDRESS_VALIDATOR_REWARDS_POOL, id, validatorFee)
-        Token.lock(ADDRESS_VALIDATOR_REWARDS_POOL, MODULE_NAME_DEX, id, validatorFee)
+        transferFromPool(pool, ADDRESS_VALIDATOR_INCENTIVES, id, validatorFee)
+        Token.lock(ADDRESS_VALIDATOR_INCENTIVES, MODULE_NAME_DEX, id, validatorFee)
 ```
 
 #### raiseSwapException
