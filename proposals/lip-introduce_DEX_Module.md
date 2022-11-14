@@ -61,7 +61,7 @@ See also the [Uniswap v3 implementation][UniswapV3Ticks].
 
 DEX module maintains a list of incentivized liquidity pools. Providing liquidity in an incentivized pool is rewarded by the protocol. This is supposed to attract more liquidity to a chosen set of pools and to facilitate low slippage swaps between the most popular tokens in DEX. Incentivizing liquidity in all pools would dilute the value of incentives for each particular liquidity provider and would be prone to abuse: users could create many custom pools with custom tokens and receive incentives for the liquidity which is not needed by any user.
 
-When a pool is added to the incentivized pool list, a priority multiplier integer value must be set for the pool. This value indicates the relative importance of this pool compared to other pools. Total liquidity provider incentives in a block are shared among all incentivized pools proportionally to the multiplier, so liquidity providers in a pool with multiplier 10 will receive twice as many rewards as liquidity providers in a pool with multiplier 5.
+When a pool is added to the incentivized pool list, a priority multiplier integer value must be set for the pool. This value indicates the relative importance of this pool compared to other pools. Total liquidity provider incentives in a block are shared among all incentivized pools proportionally to the multiplier, so liquidity providers in a pool with multiplier 10 will receive twice as many incentives as liquidity providers in a pool with multiplier 5.
 
 ## Specification
 
@@ -81,22 +81,26 @@ In this LIP, we specify the state store, internal auxiliary functions, internal 
 
 #### Q96 type conversion
 
-The Q96 numbers are stored as byte arrays of maximal length `MAX_NUM_BYTES_Q96`, however the internal functions of DEX module work with objects of type Q96 defined as in the table above. We define two functions to serialize and deserialize Q96 numbers to type bytes, `bytesToQ96` and `q96ToBytes`. The functions check that the length of byte representation does not exceed `MAX_NUM_BYTES_Q96`.
+The Q96 numbers are stored as byte arrays of maximal length `MAX_NUM_BYTES_Q96`, however the internal functions of DEX module work with objects of type Q96 defined as in the table above. We define two functions to serialize and deserialize Q96 numbers to type bytes, `bytesToQ96` and `q96ToBytes`. The functions check that the length of byte representation does not exceed `MAX_NUM_BYTES_Q96`, the actual byte representation can be shorter to optimize the memory requirements for storing and transmitting Q96 numbers.
 
 ```python
     def bytesToQ96(numberBytes: bytes) -> Q96:
         if length(bytes) > MAX_NUM_BYTES_Q96:
             raise Exception()
+        if length(bytes) == 0:
+            return 0
         return big-endian decoding of bytes
 
     def q96ToBytes(numberQ96: Q96) -> bytes:
+        if numberQ96 == 0:
+            return []
         result = big-endian encoding of numberQ96 as integer
         if length(result) > MAX_NUM_BYTES_Q96:
             raise Exception("Overflow when serializing a Q96 number")
         return result
 ```
 
-Note that a Q96 representation of number 0 is serialized to empty bytes, and empty bytes are deserialized to a Q96 representation of 0.
+Note that the byte representation of `Q96(0)` is empty bytes.
 
 ### Notation and Constants
 
@@ -119,11 +123,11 @@ We define the following constants:
 | `MAX_NUM_POSITIONS_FEE_COLLECTION`  | `uint32` | TBD            | The maximum number of positions for which it is possible to collect fees in one transaction.                                 |
 | `POOL_CREATION_FEE`       | `uint64` | TBD    | This amount of tokens is transferred to the protocol fee account when creating a new pool.|
 | `POSITION_CREATION_FEE`   | `uint64` | TBD    | This amount of tokens is transferred to the protocol fee account when creating a new position.|       
-| **DEX Rewards Module Constants**                |        |                  |                            |                            
-| `ADDRESS_LIQUIDITY_PROVIDER_REWARDS_POOL`                    | bytes |  `SHA256(b"liquidityProviderRewardsPool")[:NUM_BYTES_ADDRESS]`  | The address of the liquidity provider rewards pool.  |
-| `ADDRESS_VALIDATOR_REWARDS_POOL`                    | bytes |  `SHA256(b"validatorRewardsPool")[:20]`  | The address of the validator rewards pool.  |
-| `TOKEN_ID_REWARDS`        | bytes | TBD    | The token ID of the token used for liquidity provider, trader and validator incentives, as defined in the [DEX Rewards module](https://github.com/LiskHQ/lips-staging/blob/main/proposals/lip_introduce_DEX_Rewards_module.md).         |
-| `VALIDATORS_LSK_REWARD_PART`                    | `uint32` |  200000  | The portion of LSK swap fees that are paid to the validators, in parts-per-million.  |
+| **DEX Incentives Module Constants**                |        |                  |                            |                            
+| `ADDRESS_LIQUIDITY_PROVIDER_INCENTIVES`                    | bytes |  `SHA256(b"liquidityProviderIncentivesAccount")[:NUM_BYTES_ADDRESS]`  | The address of the liquidity provider incentives account.  |
+| `ADDRESS_VALIDATOR_INCENTIVES`                    | bytes |  `SHA256(b"validatorIncentivesAccount")[:20]`  | The address of the validator incentives account.  |
+| `TOKEN_ID_INCENTIVES`        | bytes | TBD    | The token ID of the token used for liquidity provider, trader and validator incentives, as defined in the [DEX Incentives module](https://github.com/LiskHQ/lips-staging/blob/main/proposals/lip_introduce_DEX_Rewards_module.md).         |
+| `VALIDATORS_LSK_INCENTIVE_PART`                    | `uint32` |  200000  | The portion of LSK swap fees that are paid to the validators, in parts-per-million.  |
 | **Token Module Constants**                |        |                  |                           |                            
 | `TOKEN_ID_LSK`              |  bytes |   `0x 00 00 00 00 00 00 00 00`           |    The token ID of the LSK token as defined in the [Token module][tokenLIP].     |      
 | `NUM_BYTES_TOKEN_ID`                | `uint32` | 8                     | The number of bytes of a token ID.  |         
@@ -200,8 +204,8 @@ poolsSchema = {
     "required": [
         "liquidity",
         "sqrtPrice",
-        "rewardsPerLiquidityAccumulator",
-        "heightRewardsUpdate",
+        "incentivesPerLiquidityAccumulator",
+        "heightIncentivesUpdate",
         "feeGrowthGlobal0",
         "feeGrowthGlobal1",
         "tickSpacing"
@@ -216,12 +220,12 @@ poolsSchema = {
             "maxLength": MAX_NUM_BYTES_Q96,
             "fieldNumber": 2
         },
-        "rewardsPerLiquidityAccumulator": {
+        "incentivesPerLiquidityAccumulator": {
             "dataType": "bytes",
             "maxLength": MAX_NUM_BYTES_Q96,
             "fieldNumber": 3
         },
-        "heightRewardsUpdate": {
+        "heightIncentivesUpdate": {
             "dataType": "uint32",
             "fieldNumber": 4
         }
@@ -247,8 +251,8 @@ poolsSchema = {
 
 * `liquidity`: A `uint64` integer representing the virtual liquidity of the pool.
 * `sqrtPrice`: A `byte` array with the square root of the current price in `Q96` format.
-* `rewardsPerLiquidityAccumulator`: A `byte` array with the cumulative rewards per liquidity in `Q96` format.
-* `heightRewardsUpdate`: An integer value indicating the height when the rewards per liquidity were last updated for this pool.
+* `incentivesPerLiquidityAccumulator`: A `byte` array with the cumulative incentives per liquidity in `Q96` format.
+* `heightIncentivesUpdate`: An integer value indicating the height when the incentives per liquidity were last updated for this pool.
 * `feeGrowthGlobal0`: A `byte` array with the total amount of fees in `token0` that have been collected per unit of virtual liquidity  in `Q96` format.
 * `feeGrowthGlobal1`: A `byte` array with the total amount of fees in `token1` that have been collected per unit of virtual liquidity in `Q96` format.
 * `tickSpacing`: A `uint32` integer providing the tick spacing of the pool. A tick with index `i` can only be initialized in this pool if `i % tickSpacing == 0` holds.
@@ -293,7 +297,7 @@ priceTickSchema = {
         "liquidityGross",
         "feeGrowthOutside0",
         "feeGrowthOutside1",
-        "rewardsPerLiquidityOutside"
+        "incentivesPerLiquidityOutside"
     ],
     "properties": {
         "liquidityNet": {
@@ -314,7 +318,7 @@ priceTickSchema = {
             "maxLength": MAX_NUM_BYTES_Q96,
             "fieldNumber": 4
         },
-        "rewardsPerLiquidityOutside": {
+        "incentivesPerLiquidityOutside": {
             "dataType": "bytes",
             "maxLength": MAX_NUM_BYTES_Q96,
             "fieldNumber": 5
@@ -329,7 +333,7 @@ priceTickSchema = {
 * `liquidityGross`: A `uint64` integer representing the gross tally of liquidity pointing to the tick.
 * `feeGrowthOutside0`: A `byte` array with the fee for `token0` accumulated “outside” the tick in `Q96` format.
 * `feeGrowthOutside1`: A `byte` array with the fee for `token1` accumulated “outside” the tick in `Q96` format.
-* `rewardsPerLiquidityOutside`: A `byte` array with the rewards per liqudity accumulated “outside” the tick in `Q96` format.
+* `incentivesPerLiquidityOutside`: A `byte` array with the incentives per liqudity accumulated “outside” the tick in `Q96` format.
 
 #### Positions substore
 
@@ -354,7 +358,7 @@ positionSchema = {
         "feeGrowthInsideLast0",
         "feeGrowthInsideLast1",
         "ownerAddress",
-        "rewardsPerLiquidityLast"
+        "incentivesPerLiquidityLast"
     ],
     "properties": {
         "tickLower": {
@@ -384,7 +388,7 @@ positionSchema = {
             "length": NUM_BYTES_ADDRESS,
             "fieldNumber": 6
         },
-        "rewardsPerLiquidityLast": {
+        "incentivesPerLiquidityLast": {
             "dataType": "byte",
             "maxLength": MAX_NUM_BYTES_Q96,
             "fieldNumber": 7
@@ -401,7 +405,7 @@ positionSchema = {
 * `feeGrowthInsideLast0`: A `byte` array with the fees per unit of virtual liquidity for `token0` since the last time the fees were collected, in `Q96` format.
 * `feeGrowthInsideLast1`: A `byte` array with the fees per unit of virtual liquidity for `token1` since the last time the fees were collected, in `Q96` format.
 * `ownerAddress`: A `byte` array with the address of the owner of the position.
-* `rewardsPerLiquidityLast`: A `byte` array with the cumulative rewards per liquidity of the position at the moment when it was last updated.
+* `incentivesPerLiquidityLast`: A `byte` array with the cumulative incentives per liquidity of the position at the moment when it was last updated.
 
 #### DEX global data substore
 
@@ -627,49 +631,37 @@ def transferPoolToPool(
     Token.lock(poolAddressReceive, MODULE_NAME_DEX, tokenID, amount)
 ```
 
-#### transferToValidatorLSKPool
+#### computeNewIncentivesPerLiquidity
 
-This function transfers and locks an amount of LSK tokens from the given account to the validator rewards pool.
-
-##### Execution
+For a given pool and current height, the function computes the updated incentives per liquidity accumulator at this height.
 
 ```python
-def transferToValidatorLSKPool(senderAddres: Address, amount: int) -> None:
-    Token.transfer(senderAddres, TOKEN_ID_LSK, amount, ADDRESS_VALIDATOR_REWARDS_POOL)
-    Token.lock(ADDRESS_VALIDATOR_REWARDS_POOL, MODULE_NAME_DEX, amount)
-```
-
-#### computeNewRewardsPerLiquidity
-
-For a given pool and current height, the function computes the updated rewards per liquidity accumulator at this height.
-
-```python
-def computeNewRewardsPerLiquidity(poolId: PoolID, currentHeight: int) -> Q96:
+def computeNewIncentivesPerLiquidity(poolId: PoolID, currentHeight: int) -> Q96:
     if (poolId is not in pool.poolId for some pool in dexGlobalData.incentivizedPools)
-        or pools[poolId].heightRewardsUpdate >= currentHeight:
+        or pools[poolId].heightIncentivesUpdate >= currentHeight:
         raise Exception("Invalid arguments")
 
     poolMultiplier = pool.multiplier for pool in dexGlobalData.incentivizedPools with pool.poolId == poolId
-    totalReward = DEXRewards.getLPBlockRewards(pools[poolId].heightRewardsUpdate, currentHeight)
-    reward = totalReward * poolMultiplier / dexGlobalData.totalIncentivesMultiplier
-    rewardPerLiquidity = div_96(Q96(reward), Q96(pools[poolId].liquidity))
-    currentRewardsPerLiquidity = bytesToQ96(pools[poolId].rewardsPerLiquidityAccumulator)
-    return add_96(rewardPerLiquidity, currentRewardsPerLiquidity)
+    totalIncentives = DEXIncentives.getLPIncentivesInRange(pools[poolId].heightIncentivesUpdate, currentHeight)
+    incentives = totalIncentives * poolMultiplier / dexGlobalData.totalIncentivesMultiplier
+    incentivesPerLiquidity = div_96(Q96(incentives), Q96(pools[poolId].liquidity))
+    currentIncentivesPerLiquidity = bytesToQ96(pools[poolId].incentivesPerLiquidityAccumulator)
+    return add_96(incentivesPerLiquidity, currentIncentivesPerLiquidity)
 ```
 
-#### updatePoolRewards
+#### updatePoolIncentives
 
-The function updates the rewards per liquidity value of a given pool.
+The function updates the incentives per liquidity value of a given pool.
 
 ```python
-def updatePoolRewards(poolId: PoolID, currentHeight: int) -> None:
+def updatePoolIncentives(poolId: PoolID, currentHeight: int) -> None:
     if (poolId is not in pool.poolId for some pool in dexGlobalData.incentivizedPools)
-        or pools[poolId].heightRewardsUpdate >= currentHeight:
-        # pool is not incentivized or all rewards already collected
+        or pools[poolId].heightIncentivesUpdate >= currentHeight:
+        # pool is not incentivized or all incentives already collected
         return
-    newRewardsPerLiquidity = computeNewRewardsPerLiquidity(poolId, currentHeight)
-    pools[poolId].rewardsPerLiquidityAccumulator = q96ToBytes(newRewardsPerLiquidity)
-    pools[poolId].heightRewardsUpdate = currentHeight
+    newIncentivesPerLiquidity = computeNewIncentivesPerLiquidity(poolId, currentHeight)
+    pools[poolId].incentivesPerLiquidityAccumulator = q96ToBytes(newIncentivesPerLiquidity)
+    pools[poolId].heightIncentivesUpdate = currentHeight
 ```
 
 ### Internal Math Functions
@@ -959,9 +951,9 @@ The function adds the given pool to the list of incentivized pools with the give
 
 ```python
 def updateIncentivizedPools(poolId: PoolID, multiplier: int, currentHeight: int) -> None:
-    # update rewards per liquidity in all pools
+    # update incentives per liquidity in all pools
     for pool in dexGlobalData.incentivizedPools:
-        updatePoolRewards(pool.poolId, currentHeight)
+        updatePoolIncentives(pool.poolId, currentHeight)
 
     for pool in dexGlobalData.incentivizedPools:
         if pool.poolId == poolId:
@@ -1261,8 +1253,8 @@ genesisDEXSchema = {
                     "poolId",
                     "liquidity",
                     "sqrtPrice",
-                    "rewardsPerLiquidityAccumulator",
-                    "heightRewardsUpdate",
+                    "incentivesPerLiquidityAccumulator",
+                    "heightIncentivesUpdate",
                     "feeGrowthGlobal0",
                     "feeGrowthGlobal1",
                     "tickSpacing"
@@ -1282,12 +1274,12 @@ genesisDEXSchema = {
                         "maxLength": MAX_NUM_BYTES_Q96,
                         "fieldNumber": 3
                     },
-                    "rewardsPerLiquidityAccumulator": {
+                    "incentivesPerLiquidityAccumulator": {
                         "dataType": "bytes",
                         "maxLength": MAX_NUM_BYTES_Q96,
                         "fieldNumber": 4
                     },
-                    "heightRewardsUpdate": {
+                    "heightIncentivesUpdate": {
                         "dataType": "uint32",
                         "fieldNumber": 5
                     }
@@ -1319,7 +1311,7 @@ genesisDEXSchema = {
                     "liquidityGross",
                     "feeGrowthOutside0",
                     "feeGrowthOutside1",
-                    "rewardsPerLiquidityOutside"
+                    "incentivesPerLiquidityOutside"
                 ],
                 "properties": {
                     "tickId": {
@@ -1345,7 +1337,7 @@ genesisDEXSchema = {
                         "maxLength": MAX_NUM_BYTES_Q96,
                         "fieldNumber": 5
                     },
-                    "rewardsPerLiquidityOutside": {
+                    "incentivesPerLiquidityOutside": {
                         "dataType": "bytes",
                         "maxLength": MAX_NUM_BYTES_Q96,
                         "fieldNumber": 6
@@ -1366,7 +1358,7 @@ genesisDEXSchema = {
                     "feeGrowthInsideLast0",
                     "feeGrowthInsideLast1",
                     "ownerAddress",
-                    "rewardsPerLiquidityLast"
+                    "incentivesPerLiquidityLast"
                 ],
                 "properties": {
                     "positionId": {
@@ -1401,7 +1393,7 @@ genesisDEXSchema = {
                         "length": NUM_BYTES_ADDRESS,
                         "fieldNumber": 7
                     },
-                    "rewardsPerLiquidityLast": {
+                    "incentivesPerLiquidityLast": {
                         "dataType": "byte",
                         "maxLength": MAX_NUM_BYTES_Q96,
                         "fieldNumber": 8
@@ -1531,8 +1523,8 @@ storeKey = pool.poolId
 storeValue = {
     "liquidity": pool.liquidity,
     "sqrtPrice": pool.sqrtPrice,
-    "rewardsPerLiquidityAccumulator": pool.rewardsPerLiquidityAccumulator,
-    "heightRewardsUpdate": pool.heightRewardsUpdate,
+    "incentivesPerLiquidityAccumulator": pool.incentivesPerLiquidityAccumulator,
+    "heightIncentivesUpdate": pool.heightIncentivesUpdate,
     "feeGrowthGlobal0": pool.feeGrowthGlobal0,
     "feeGrowthGlobal1": pool.feeGrowthGlobal1,
     "tickSpacing": pool.tickSpacing
@@ -1548,7 +1540,7 @@ storeValue = {
     "liquidityGross": priceTick.liquidityGross,
     "feeGrowthOutside0": priceTick.feeGrowthOutside0,
     "feeGrowthOutside1": priceTick.feeGrowthOutside1,
-    "rewardsPerLiquidityOutside": priceTick.rewardsPerLiquidityOutside
+    "incentivesPerLiquidityOutside": priceTick.incentivesPerLiquidityOutside
 } serialized using priceTickSchema
 ```
 
@@ -1563,7 +1555,7 @@ storeValue = {
     "feeGrowthInsideLast0": position.feeGrowthInsideLast0,
     "feeGrowthInsideLast1": position.feeGrowthInsideLast1,
     "ownerAddress": position.ownerAddress,
-    "rewardsPerLiquidityLast": position.rewardsPerLiquidityLast
+    "incentivesPerLiquidityLast": position.incentivesPerLiquidityLast
 } serialized using positionSchema
 ```
 
