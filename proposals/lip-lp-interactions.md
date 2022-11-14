@@ -681,7 +681,7 @@ def execute(trs: Transaction) -> None:
         raise Exception()
 
     # deduct pool creation fee
-    transferToValidatorLSKPool(senderAddress, POOL_CREATION_FEE)
+    Fee.payFee(POOL_CREATION_FEE)
 
     # emit event about the successful position creation detailing the exact amounts added to the position
     emitEvent(
@@ -845,7 +845,7 @@ def execute(trs: Transaction) -> None:
         raise Exception()
 
     # deduct position creation fee
-    transferToValidatorLSKPool(senderAddress, POSITION_CREATION_FEE)
+    Fee.payFee(POSITION_CREATION_FEE)
 
     # emit event about the successful position creation detailing the exact amounts added to the position
     emitEvent(
@@ -1229,15 +1229,15 @@ def collectFeesAndIncentives(positionID: PositionID, currentHeight: int) -> None
     positionInfo.feeGrowthInsideLast1 = q96ToBytes(feeGrowthInside1)
 
     # compute collectable incentives
-    # update pool rewards at the current liquidity before withdrawing
-    updatePoolRewards(poolID, currentHeight)
-    rewardsAccumulatorQ96 = bytesToQ96(pools[poolID].rewardsPerLiquidityAccumulator)
-    (collectableIncentives, rewardsPerLiquidityInside) = computeCollectableIncentives(positionID, rewardsAccumulatorQ96)
+    # update pool incentives at the current liquidity before withdrawing
+    updatePoolIncentives(poolID, currentHeight)
+    incentivesAccumulatorQ96 = bytesToQ96(pools[poolID].incentivesPerLiquidityAccumulator)
+    (collectableIncentives, incentivesPerLiquidityInside) = computeCollectableIncentives(positionID, incentivesAccumulatorQ96)
 
     # transfer incentives and update position information accordingly
-    Token.unlock(ADDRESS_LIQUIDITY_PROVIDERS_REWARDS_POOL, MODULE_NAME_DEX, TOKEN_ID_REWARDS, collectableIncentives)
-    Token.transfer(ADDRESS_LIQUIDITY_PROVIDERS_REWARDS_POOL, ownerAddress, TOKEN_ID_REWARDS, collectableIncentives)
-    positionInfo.rewardsPerLiquidityLast = q96ToBytes(rewardsPerLiquidityInside)
+    Token.unlock(ADDRESS_LIQUIDITY_PROVIDER_INCENTIVES, MODULE_NAME_DEX, TOKEN_ID_INCENTIVES, collectableIncentives)
+    Token.transfer(ADDRESS_LIQUIDITY_PROVIDER_INCENTIVES, ownerAddress, TOKEN_ID_INCENTIVES, collectableIncentives)
+    positionInfo.incentivesPerLiquidityLast = q96ToBytes(incentivesPerLiquidityInside)
     position(positionID) = positionInfo
 
     # emit an event providing information about the collected fees and incentives
@@ -1252,7 +1252,7 @@ def collectFeesAndIncentives(positionID: PositionID, currentHeight: int) -> None
             "collectedFees1": collectableFees1,
             "tokenID1": getToken1Id(poolID),
             "collectedIncentives": collectableIncentives,
-            "tokenIDIncentives": TOKEN_ID_REWARDS
+            "tokenIDIncentives": TOKEN_ID_INCENTIVES
         },
         topics = [
             senderAddress,
@@ -1300,24 +1300,24 @@ def computeCollectableFees(positionID: PositionID) -> Tuple[uint64, uint64, Q96,
 
 #### computeCollectableIncentives
 
-Given a position, this function computes the additional liquidity provider incentives for the position owner. The function allows to compute incentives for a particular value of rewards per liquidity accumulator in the pool containing the given position.
+Given a position, this function computes the additional liquidity provider incentives for the position owner. The function allows to compute incentives for a particular value of incentives per liquidity accumulator in the pool containing the given position.
 
 ##### Parameters
 
 * `positionID`: The ID of the position for which to collect the fees.
-* `rewardsPerLiquidityAccumulator`: The Q96 value of rewards per liquidity accumulator in the pool containing the position.
+* `incentivesPerLiquidityAccumulator`: The Q96 value of incentives per liquidity accumulator in the pool containing the position.
 
 ##### Returns
 
-A tuple `(collectableIncentives, rewardsPerLiquidityInside)` where
+A tuple `(collectableIncentives, incentivesPerLiquidityInside)` where
 
-* `collectableIncentives`: The amount of liquidity provider incentives to be collected in `TOKEN_ID_REWARDS`.
-* `rewardsPerLiquidityInside`: The current position rewards given per unit of liquidity.
+* `collectableIncentives`: The amount of liquidity provider incentives to be collected in `TOKEN_ID_INCENTIVES`.
+* `incentivesPerLiquidityInside`: The current position incentives given per unit of liquidity.
 
 ##### Execution
 
 ```python
-def computeCollectableIncentives(positionID: PositionID, rewardsPerLiquidityAccumulator: Q96) -> Tuple[uint64, Q96]:
+def computeCollectableIncentives(positionID: PositionID, incentivesPerLiquidityAccumulator: Q96) -> Tuple[uint64, Q96]:
     positionInfo = positions[positionID]
     poolID = getPoolIDFromPositionID(positionID)
 
@@ -1328,21 +1328,21 @@ def computeCollectableIncentives(positionID: PositionID, rewardsPerLiquidityAccu
     lowerTickInfo = ticks(poolID, tickLower)
     upperTickInfo = ticks(poolID, tickUpper)
 
-    # compute rewards per liquidity below
+    # compute incentives per liquidity below
     if tickCurrent >= tickLower:
-        rewardsPLBelow = bytesToQ96(lowerTickInfo.rewardsPerLiquidityOutside)
+        incentivesPLBelow = bytesToQ96(lowerTickInfo.incentivesPerLiquidityOutside)
     else:
-        rewardsPLBelow = sub_96(rewardsPerLiquidityAccumulator, bytesToQ96(lowerTickInfo.rewardsPerLiquidityOutside))
-    # compute rewards per liquidity above
+        incentivesPLBelow = sub_96(incentivesPerLiquidityAccumulator, bytesToQ96(lowerTickInfo.incentivesPerLiquidityOutside))
+    # compute incentives per liquidity above
     if tickCurrent < tickUpper:
-        rewardsPLAbove = bytesToQ96(upperTickInfo.rewardsPerLiquidityOutside)
+        incentivesPLAbove = bytesToQ96(upperTickInfo.incentivesPerLiquidityOutside)
     else:
-        rewardsPLAbove = sub_96(rewardsPerLiquidityAccumulator, bytesToQ96(upperTickInfo.rewardsPerLiquidityOutside))
+        incentivesPLAbove = sub_96(incentivesPerLiquidityAccumulator, bytesToQ96(upperTickInfo.incentivesPerLiquidityOutside))
 
-    rewardsPerLiquidityInside = sub_96(sub_96(rewardsPerLiquidityAccumulator, rewardsPLBelow), rewardsPLAbove)
-    collectableRewardsPL = sub_96(rewardsPerLiquidityInside, bytesToQ96(positionInfo.rewardsPerLiquidityLast))
-    collectableIncentives = roundDown_96(mul_96(collectableRewardsPL, Q96(positionInfo.liquidity)))
-    return (collectableIncentives, rewardsPerLiquidityInside)
+    incentivesPerLiquidityInside = sub_96(sub_96(incentivesPerLiquidityAccumulator, incentivesPLBelow), incentivesPLAbove)
+    collectableIncentivesPL = sub_96(incentivesPerLiquidityInside, bytesToQ96(positionInfo.incentivesPerLiquidityLast))
+    collectableIncentives = roundDown_96(mul_96(collectableIncentivesPL, Q96(positionInfo.liquidity)))
+    return (collectableIncentives, incentivesPerLiquidityInside)
 ```
 
 
@@ -1388,7 +1388,7 @@ def createPool(tokenID0: TokenID, tokenID1: TokenID, feeTier: uint32, initialSqr
     poolStoreValue = {
         "liquidity": 0,
         "sqrtPrice": initialSqrtPrice,
-        "rewardsPerLiquidityAccumulator": q96ToBytes(Q96(0)),
+        "incentivesPerLiquidityAccumulator": q96ToBytes(Q96(0)),
         "feeGrowthGlobal0": q96ToBytes(Q96(0)),
         "feeGrowthGlobal1": q96ToBytes(Q96(0)),
         "tickSpacing": poolSetting.tickSpacing
@@ -1443,12 +1443,12 @@ def createPosition(senderAddress: Address, poolID: PoolID, tickLower: uint32, ti
            "liquidityGross": 0,
            "feeGrowthOutside0": q96ToBytes(Q96(0)),
            "feeGrowthOutside1": q96ToBytes(Q96(0)),
-           "rewardsPerLiquidityOutside": q96ToBytes(Q96(0))
+           "incentivesPerLiquidityOutside": q96ToBytes(Q96(0))
         }
         if bytesToQ96(currentPool.sqrtPrice) >= tickToPrice(tickLower):
             tickStoreValue.feeGrowthOutside0 = currentPool.feeGrowthGlobal0
             tickStoreValue.feeGrowthOutside1 = currentPool.feeGrowthGlobal1
-            tickStoreValue.rewardsPerLiquidityOutside = currentPool.rewardsPerLiquidityAccumulator
+            tickStoreValue.incentivesPerLiquidityOutside = currentPool.incentivesPerLiquidityAccumulator
 
         ticks(poolID, tickLower) = encode(priceTickSchema, tickStoreValue)
 
@@ -1459,12 +1459,12 @@ def createPosition(senderAddress: Address, poolID: PoolID, tickLower: uint32, ti
             "liquidityGross": 0,
             "feeGrowthOutside0": q96ToBytes(Q96(0)),
             "feeGrowthOutside1": q96ToBytes(Q96(0)),
-            "rewardsPerLiquidityOutside": q96ToBytes(Q96(0))
+            "incentivesPerLiquidityOutside": q96ToBytes(Q96(0))
         }
         if bytesToQ96(currentPool.sqrtPrice) >= tickToPrice(tickUpper):
             tickStoreValue.feeGrowthOutside0 = currentPool.feeGrowthGlobal0
             tickStoreValue.feeGrowthOutside1 = currentPool.feeGrowthGlobal1
-            tickStoreValue.rewardsPerLiquidityOutside = currentPool.rewardsPerLiquidityAccumulator
+            tickStoreValue.incentivesPerLiquidityOutside = currentPool.incentivesPerLiquidityAccumulator
 
         ticks(poolID, tickUpper) = encode(priceTickSchema, tickStoreValue)
 
@@ -1477,7 +1477,7 @@ def createPosition(senderAddress: Address, poolID: PoolID, tickLower: uint32, ti
         "feeGrowthInsideLast0": q96ToBytes(Q96(0)),
         "feeGrowthInsideLast1": q96ToBytes(Q96(0)),
         "ownerAddress": senderAddress,
-        "rewardsPerLiquidityLast": q96ToBytes(Q96(0))
+        "incentivesPerLiquidityLast": q96ToBytes(Q96(0))
     }
     positions[positionID] = encode(positionSchema, positionValue)
     return (POSITION_CREATION_SUCCESS, positionID)
@@ -1630,7 +1630,7 @@ The function is similar to the function [_modifyPosition](https://github.com/Uni
 
 * `positionID`: The ID of the position that is supposed to be updated.
 * `liquidityDelta`: The change of liquidity, i.e., a positive integer if liquidity is added and a negative integer if liquidity is supposed to be removed.
-* `currentHeight`: An integer with the height of the block when the swap is performed, is needed for correct reward computation.
+* `currentHeight`: An integer with the height of the block when the swap is performed, is needed for correct incentive computation.
 
 
 ##### Returns
@@ -1752,7 +1752,7 @@ A tuple `(collectableFees0, collectableFees1, collectableIncentives)` where
 
 * `collectableFees0`: The amount of fees in `token0` that can be collected by the position owner.
 * `collectableFees1`: The amount of fees in `token1` that can be collected by the position owner.
-* `collectableIncentives`: The amount of liqudity provider incentives in the token with ID `TOKEN_ID_REWARDS` that can be collected by the position owner.
+* `collectableIncentives`: The amount of liqudity provider incentives in the token with ID `TOKEN_ID_INCENTIVES` that can be collected by the position owner.
 
 ##### Execution
 
@@ -1766,8 +1766,8 @@ getCollectableFeesAndIncentives(positionID: PositionID) -> Tuple[uint64, uint64,
 
     poolID = getPoolIDFromPositionID(positionID)
     height = current height of the last block
-    updatedRewardsPerLiqiudity = computeNewRewardsPerLiquidity(poolID, height)
-    (collectableIncentives, rewardsPerLiquidityInside) = computeCollectableIncentives(positionID, updatedRewardsPerLiqiudity)
+    updatedIncentivesPerLiqiudity = computeNewIncentivesPerLiquidity(poolID, height)
+    (collectableIncentives, incentivesPerLiquidityInside) = computeCollectableIncentives(positionID, updatedIncentivesPerLiqiudity)
     return (collectableFees0, collectableFees1, collectableIncentives)
 ```
 
