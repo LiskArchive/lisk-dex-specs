@@ -85,11 +85,11 @@ The Q96 numbers are stored as byte arrays of maximal length `MAX_NUM_BYTES_Q96`,
 
 ```python
     def bytesToQ96(numberBytes: bytes) -> Q96:
-        if length(bytes) > MAX_NUM_BYTES_Q96:
+        if length(numberBytes) > MAX_NUM_BYTES_Q96:
             raise Exception()
-        if length(bytes) == 0:
+        if length(numberBytes) == 0:
             return 0
-        return big-endian decoding of bytes
+        return big-endian decoding of numberBytes
 
     def q96ToBytes(numberQ96: Q96) -> bytes:
         if numberQ96 == 0:
@@ -118,8 +118,8 @@ We define the following constants:
 | `NUM_BYTES_POOL_ID`                | `uint32` | 20                     | The number of bytes of a pool ID.  |    
 | `NUM_BYTES_TICK_ID`                | `uint32` | 24                     | The number of bytes of a price tick ID.  |      
 | `NUM_BYTES_POSITION_ID`                | `uint32` | 28                     | The number of bytes of a position ID.  |     
-| `MAX_NUMBER_CROSSED_TICKS`                | `uint32` | TBA                     | Maximum number of price ticks to be crossed by a single swap.  |
-| `MAX_HOPS_SWAP`                | `uint32` | TBA                     | Maximum number of different pools that a complete swap can interact with.  |   
+| `MAX_NUMBER_CROSSED_TICKS`                | `uint32` | TBD                     | Maximum number of price ticks to be crossed by a single swap.  |
+| `MAX_HOPS_SWAP`                | `uint32` | TBD                     | Maximum number of different pools that a complete swap can interact with.  |   
 | `MAX_NUM_POSITIONS_FEE_COLLECTION`  | `uint32` | TBD            | The maximum number of positions for which it is possible to collect fees in one transaction.                                 |
 | `POOL_CREATION_FEE`       | `uint64` | TBD    | This amount of tokens is transferred to the protocol fee account when creating a new pool.|
 | `POSITION_CREATION_FEE`   | `uint64` | TBD    | This amount of tokens is transferred to the protocol fee account when creating a new position.|       
@@ -132,9 +132,9 @@ We define the following constants:
 | `TOKEN_ID_LSK`              |  bytes |   `0x 00 00 00 00 00 00 00 00`           |    The token ID of the LSK token as defined in the [Token module][tokenLIP].     |      
 | `NUM_BYTES_TOKEN_ID`                | `uint32` | 8                     | The number of bytes of a token ID.  |         
 | **DEX Module Store**                    |        |                  | |                                                       |
-| `SUBSTORE_PREFIX_POOL`                    | bytes  | 0x4000           | Substore prefix of the pools substore. |
+| `SUBSTORE_PREFIX_POOLS`                    | bytes  | 0x4000           | Substore prefix of the pools substore. |
 | `SUBSTORE_PREFIX_PRICE_TICK`                    | bytes  | 0x8000           | Substore prefix of the price tick substore. |
-| `SUBSTORE_PREFIX_POSITION`                    | bytes  | 0xc000           | Substore prefix of the positions substore. |
+| `SUBSTORE_PREFIX_POSITIONS`                    | bytes  | 0xc000           | Substore prefix of the positions substore. |
 | `SUBSTORE_PREFIX_DATA`                    | bytes  | 0xe000           | Substore prefix of the DEX global data substore. |
 | **DEX Module Command Names**              |        |                  |                                                |
 | `COMMAND_SWAP_EXACT_INPUT`                    | string | "swapExactInput"                | Command name of swap exact input command. |
@@ -159,10 +159,11 @@ We define the following constants:
 | **Math Constants**                         |        |                  |                                              |    
 | `MIN_TICK`                                  | `sint32`  | -887272     | The minimum possible tick value as a sint32. |
 | `MAX_TICK`                              | `sint32` | 887272       | The maximum possible tick value as a sint32. |
-| `MIN_SQRT_RATIO`                              | `uint256` | 4295128738 Todo: check with devs | The minimum possible price value in the `Q96` representation. |
-| `MAX_SQRT_RATIO`                              | `uint256` | 1461446703529909599612049957420313862569572983184 Todo: check with devs | The maximum possible price value in the `Q96` representation. |
-| `PRICE_VALUE_FOR_BIT_POSITION_IN_Q96`   | `uint256` |  TBA     | Array of `uint256` values with the pre-computed values of price for certain values of `tickValue` in the `Q96` representation. |
-| `PRICE_VALUE_FOR_TICK_1`   | `uint256` |  TBA     | The pre-computed value for `tickToPrice(1)` in the `Q96` representation. |
+| `MIN_SQRT_RATIO`                              | Q96 | 4295128738 | The minimum possible price value in the `Q96` representation, computed as `tickToPrice(MIN_TICK)` |
+| `MAX_SQRT_RATIO`                              | Q96 | 1461446703529909599612049957420313862569572983184 | The maximum possible price value in the `Q96` representation, computed as `tickToPrice(MAX_TICK)`. |
+| `LOG_MAX_TICK`   | `uint32`  |    19  |  The value computed as `⌊log(MAX_TICK, 2)⌋`, represents the maximal possible number of bits to record a value up to `MAX_TICK`. |
+| `PRICE_VALUE_FOR_BIT_POSITION_IN_Q96`   | list[Q96] |  See [Appendix](#price-value-for-tick-bit-position-array)     | Array of length `LOG_MAX_TICK` containing the pre-computed values of price for certain values of `tickValue` in the `Q96` representation. |
+| `PRICE_VALUE_FOR_TICK_1`   | Q96 |  79232123823359799118286999567 | The pre-computed value for `tickToPrice(1)` in the `Q96` representation. |
 
 #### Logic from Other Modules
 
@@ -272,7 +273,7 @@ def tickToBytes(tickValue: int32) -> bytes:
 def bytesToTick(serializedTick: bytes) -> int32:
     if length(serializedTick) != 4:
         raise Exception()
-    tickValue = int.from_bytes(serializedTick, byteorder='big', signed=false) - 2**31
+    tickValue = int.from_bytes(serializedTick, byteorder='big', signed=False) - 2**31
     if tickValue > MAX_TICK or tickValue < MIN_TICK:
         raise Exception()
     return tickValue
@@ -339,10 +340,10 @@ priceTickSchema = {
 
 ##### Substore Prefix, Store Key, and Store Value
 
-* The substore prefix is set to `SUBSTORE_PREFIX_POSITION`.
+* The substore prefix is set to `SUBSTORE_PREFIX_POSITIONS`.
 * Each store key is a byte array of length `NUM_BYTES_POSITION_ID` representing a position ID.
 * Each store value is the serialization of an object following the JSON schema `positionSchema` presented below.
-* Notation: We  let `positions` denote the object stored in the DEX module store with substore prefix `SUBSTORE_PREFIX_POSITION`, deserialized as a dictionary.
+* Notation: We  let `positions` denote the object stored in the DEX module store with substore prefix `SUBSTORE_PREFIX_POSITIONS`, deserialized as a dictionary.
 
 A position ID is a byte array of length `NUM_BYTES_POSITION_ID` given by `poolId + index.to_bytes(8, byteorder = 'big', signed = False)`, where `poolId` is the pool ID of the corresponding pool and `index` the index of the position. Indices are assigned to the positions sequentially among all the positions in all pools.
 
@@ -550,8 +551,8 @@ def getFeeTier(poolId: PoolID) -> uint32:
 This helper function computes the pool ID from a given position ID.
 
 ```python
-def getPoolIDFromPositionID(positionID: PositionID) -> PoolID:
-    return positionID[:NUM_BYTES_POOL_ID]
+def getPoolIDFromPositionID(positionId: PositionID) -> PoolID:
+    return positionId[:NUM_BYTES_POOL_ID]
 ```
 
 #### getPoolIDFromTickID
@@ -559,8 +560,8 @@ def getPoolIDFromPositionID(positionID: PositionID) -> PoolID:
 This helper function computes the pool ID from a given tick ID.
 
 ```python
-def getPoolIDFromTickID(tickID: TickID) -> PoolID:
-    return tickID[:NUM_BYTES_POOL_ID]
+def getPoolIDFromTickID(tickId: TickID) -> PoolID:
+    return tickId[:NUM_BYTES_POOL_ID]
 ```
 
 #### getPositionIndex
@@ -585,8 +586,8 @@ def transferToPool(
     amount: uint64
     ) -> None:
     poolAddress = poolIdToAddress(poolId)
-    Token.transfer(senderAddress, poolAddress, tokenID, amount)
-    Token.lock(poolAddress, MODULE_NAME_DEX, tokenID, amount)
+    Token.transfer(senderAddress, poolAddress, tokenId, amount)
+    Token.lock(poolAddress, MODULE_NAME_DEX, tokenId, amount)
 ```  
 #### transferFromPool
 
@@ -600,8 +601,8 @@ def transferFromPool(
     amount: uint64
     ) -> None:
     poolAddress = poolIdToAddress(poolId)
-    Token.unlock(poolAddress, MODULE_NAME_DEX, tokenID, amount)
-    Token.transfer(poolAddress, recipientAddress, tokenID, amount)
+    Token.unlock(poolAddress, MODULE_NAME_DEX, tokenId, amount)
+    Token.transfer(poolAddress, recipientAddress, tokenId, amount)
 ```
 
 #### transferPoolToPool
@@ -626,9 +627,9 @@ def transferPoolToPool(
     ) -> None:
     poolAddressSend = poolIdToAddress(poolIdSend)
     poolAddressReceive = poolIdToAddress(poolIdReceive)
-    Token.unlock(poolAddressSend, MODULE_NAME_DEX, tokenID, amount)
-    Token.transfer(poolAddressSend, poolAddressReceive, tokenID, amount)
-    Token.lock(poolAddressReceive, MODULE_NAME_DEX, tokenID, amount)
+    Token.unlock(poolAddressSend, MODULE_NAME_DEX, tokenId, amount)
+    Token.transfer(poolAddressSend, poolAddressReceive, tokenId, amount)
+    Token.lock(poolAddressReceive, MODULE_NAME_DEX, tokenId, amount)
 ```
 
 #### computeNewIncentivesPerLiquidity
@@ -643,8 +644,8 @@ def computeNewIncentivesPerLiquidity(poolId: PoolID, currentHeight: int) -> Q96:
 
     poolMultiplier = pool.multiplier for pool in dexGlobalData.incentivizedPools with pool.poolId == poolId
     totalIncentives = DEXIncentives.getLPIncentivesInRange(pools[poolId].heightIncentivesUpdate, currentHeight)
-    incentives = totalIncentives * poolMultiplier / dexGlobalData.totalIncentivesMultiplier
-    incentivesPerLiquidity = div_96(Q96(incentives), Q96(pools[poolId].liquidity))
+    incentives = muldiv_96(Q96(totalIncentives), Q96(poolMultiplier), Q96(dexGlobalData.totalIncentivesMultiplier))
+    incentivesPerLiquidity = div_96(incentives, Q96(pools[poolId].liquidity))
     currentIncentivesPerLiquidity = bytesToQ96(pools[poolId].incentivesPerLiquidityAccumulator)
     return add_96(incentivesPerLiquidity, currentIncentivesPerLiquidity)
 ```
@@ -667,7 +668,6 @@ def updatePoolIncentives(poolId: PoolID, currentHeight: int) -> None:
 ### Internal Math Functions
 
 In this section we specify certain internal mathematical functions that are used in both DEX user interactions and hence, in several commands of the DEX module.
-We also define the constant `LOG_MAX_TICK = ⌊log(MAX_TICK, 2)⌋ = 19`, which will be used throughout the section.
 
 #### tickToPrice
 
@@ -686,7 +686,7 @@ def tickToPrice(tickValue: int32) -> SqrtPrice:
     absTick = abs(tickValue)
     sqrtPrice = Q96(1)
     # iterate the bit representation of absTick from the highest to the lowest
-    for i in range(19, -1, -1):
+    for i in range(LOG_MAX_TICK, -1, -1):
         if ((absTick >> i) & 1) == 1:
             sqrtPriceAtBit = PRICE_VALUE_FOR_BIT_POSITION_IN_Q96[i]
             sqrtPrice = mul_96(sqrtPrice, sqrtPriceAtBit)
@@ -696,9 +696,6 @@ def tickToPrice(tickValue: int32) -> SqrtPrice:
 
     return sqrtPrice
 ```
-
-where the value for the array of constants `PRICE_VALUE_FOR_BIT_POSITION_IN_Q96` are pre-computed as `Q96(1.0001^((-2^i)/2))` for `i` in `[0, LOG_MAX_TICK]`. In the notation `log(x, b)`, `b` signifies the base of the logarithm.
-
 
 #### priceToTick
 
@@ -905,6 +902,15 @@ def getCredibleDirectPrice(token0: TokenID, token1: TokenID) -> Q96:
 
 ### Protocol Logic for Other Modules
 
+#### poolExists
+
+The function checks whether a pool with the given pool ID exists in the pools store.
+
+```python
+def poolExists(poolId: PoolID) -> boolean:
+    return poolId in pools
+```
+
 #### addPoolCreationSettings
 
 Function adds a new pair of fee tier and tick spacing to the pool creation settings. Fee tiers are given in units of parts-per-million of the swap amount, so they are numbers between 0 and 10^6 (inclusive). Fee tier has to be different from the already existing fee tiers.
@@ -959,7 +965,7 @@ def updateIncentivizedPools(poolId: PoolID, multiplier: int, currentHeight: int)
         if pool.poolId == poolId:
             dexGlobalData.totalIncentivesMultiplier -= pool.multiplier
             remove pool from dexGlobalData.incentivizedPools
-    if multiplier >= 0:
+    if multiplier > 0:
         dexGlobalData.totalIncentivesMultiplier += multiplier
         dexGlobalData.incentivizedPools.append({"poolId": poolId, "multiplier": multiplier})
         sort dexGlobalData.incentivizedPools with respect to poolId in ascending order
@@ -1644,6 +1650,38 @@ For two numbers `a`,`b` and `c` in `Qn` format, we define the following arithmet
 * Convert to integer rounding up: `Q_n_ToIntRoundUp(a) = roundUp_n(a)`
 * Inversion in the decimal precision space: `inv_n(a) = div_n(1 << n, a)`
 
+### Price value for tick bit position array
+
+The following values in Q96 format should be used for `PRICE_VALUE_FOR_BIT_POSITION_IN_Q96` array in price to tick and tick to price conversion. The values for the array are pre-computed as `Q96(1.0001^((-2^i)/2))` for `i` in `[0, LOG_MAX_TICK]`
+
+The values with indices `[1,..,19]` are computed as: `[(2**96*10000**(2**i //2) // (10001 ** ((2**i)//2))) for i in range(1,20)]`. Note that implementing these computations in practice requires using unbounded integers as the intermediate values are big.
+
+The value with index `0` is `sqrt(1/1.0001)`, and is computed as `x` satisfying `div_96(Q96(10000), Q96(10001)) == mul_96(x, x)`.
+
+```python
+PRICE_VALUE_FOR_BIT_POSITION_IN_Q96 = [
+79224201403219477170569942573,
+79220240490215316061937756560,
+79212319258289487113226433916,
+79196479170490597288862688490,
+79164808496886665658930780291,
+79101505139923049997807806614,
+78975050245229982702767995059,
+78722746600537056721934508529,
+78220554859095770638340573243,
+77225761753129597550065289036,
+75273969370139069689486932537,
+71517125791179246722882903167,
+64556580881331167221767657719,
+52601903197458624361810746399,
+34923947901690145425342545398,
+15394552875315951095595078917,
+2991262837734375505310244436,
+112935262922445818024280873,
+160982827401375763736068,
+327099227039063106]
+```
+
 [swapLIP]: https://github.com/LiskHQ/lips-staging/blob/main/proposals/lip-swap_Interaction.md
 [tokenLIP]: https://github.com/LiskHQ/lips/blob/main/proposals/lip-0051.md
 [uniswapv3whitepaper]: https://uniswap.org/whitepaper-v3.pdf
@@ -1651,7 +1689,6 @@ For two numbers `a`,`b` and `c` in `Qn` format, we define the following arithmet
 [q6496Uniswap]: https://docs.uniswap.org/sdk/guides/fetching-prices#understanding-sqrtprice
 [tokenidLIP]: https://github.com/LiskHQ/lips/blob/main/proposals/lip-0051.md#token-identification
 [getSqrtRatioAtTick]: https://github.com/Uniswap/v3-core/blob/c05a0e2c8c08c460fb4d05cfdda30b3ad8deeaac/contracts/libraries/TickMath.sol#L23
-[uint256LIP]: https://github.com/LiskHQ/lips-staging/blob/main/proposals/lip_add_256_bit_integer_types_to_lisk_codec.md
 [getSqrtRatioAtTickTypescript]: https://github.com/Uniswap/v3-sdk/blob/52fa487363e6ffa0dd96b554c0e2448f257dd69f/src/utils/tickMath.ts#L41
 [getTickAtSqrtRatio]: https://github.com/Uniswap/v3-core/blob/c05a0e2c8c08c460fb4d05cfdda30b3ad8deeaac/contracts/libraries/TickMath.sol#L61
 [getTickAtSqrtRatioTypescript]: https://github.com/Uniswap/v3-sdk/blob/52fa487363e6ffa0dd96b554c0e2448f257dd69f/src/utils/tickMath.ts#L82
