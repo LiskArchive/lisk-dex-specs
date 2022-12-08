@@ -592,13 +592,14 @@ def verify(trs: Transaction) -> None:
 def execute(trs: Transaction) -> None:
     # create pool
     senderAddress = address derived from trs.senderPublicKey
+    currentHeight = height of the block containing trs
     initialSqrtPrice = tickToPrice(trs.params.tickInitialPrice)
-    result = createPool(trs.params.tokenID0, trs.params.tokenID1, trs.params.feeTier, initialSqrtPrice)
+    result = createPool(trs.params.tokenID0, trs.params.tokenID1, trs.params.feeTier, initialSqrtPrice, currentHeight)
     if result != POOL_CREATION_SUCCESS:
         # the pool creation failed and an event indicating the failure reason is emitted
-        emitPersistentEvent((
-            moduleID = MODULE_ID_DEX,
-            typeID = EVENT_NAME_POOL_CREATION_FAILED,
+        emitPersistentEvent(
+            module = MODULE_NAME_DEX,
+            name = EVENT_NAME_POOL_CREATION_FAILED,
             data = {
                 "senderAddress": senderAddress,
                 "tokenID0": tokenID0,
@@ -613,8 +614,8 @@ def execute(trs: Transaction) -> None:
     poolID = computePoolID(trs.params.tokenID0, trs.params.tokenID1, trs.params.feeTier)
     # emit event about successful pool creation
     emitEvent(
-        moduleID = MODULE_ID_DEX,
-        typeID = EVENT_NAME_POOL_CREATED,
+        module = MODULE_NAME_DEX,
+        name = EVENT_NAME_POOL_CREATED,
         data = {
             "senderAddress": senderAddress,
             "poolID": poolID,
@@ -633,8 +634,8 @@ def execute(trs: Transaction) -> None:
     (result, positionID) = createPosition(senderAddress, poolID, initialPosition.tickLower, initialPosition.tickUpper)
     if result != POSITION_CREATION_SUCCESS:
         emitPersistentEvent(
-            moduleID = MODULE_ID_DEX,
-            typeID = EVENT_NAME_POSITION_CREATION_FAILED,
+            module = MODULE_NAME_DEX,
+            name = EVENT_NAME_POSITION_CREATION_FAILED,
             data = {
                 "senderAddress": senderAddress,
                 "poolID": poolID,
@@ -647,7 +648,6 @@ def execute(trs: Transaction) -> None:
         raise Exception()
 
     # add liquidity to position
-    currentHeight = height of the block containing trs
     tickLowerSqrtPrice = tickToPrice(initialPosition.tickLower)
     tickUpperSqrtPrice = tickToPrice(initialPosition.tickUpper)
     liquidity = getLiquidityForAmounts(initialSqrtPrice,
@@ -661,8 +661,8 @@ def execute(trs: Transaction) -> None:
     if amount0 == 0 or amount1 == 0:
         # emit event explaining why the command execution failed
         emitPersistentEvent(
-            moduleID = MODULE_ID_DEX,
-            typeID = EVENT_NAME_AMOUNT_BELOW_MIN,
+            module = MODULE_NAME_DEX,
+            name = EVENT_NAME_AMOUNT_BELOW_MIN,
             data = {
                 "senderAddress": senderAddress,
                 "amount0": amount0,
@@ -685,8 +685,8 @@ def execute(trs: Transaction) -> None:
 
     # emit event about the successful position creation detailing the exact amounts added to the position
     emitEvent(
-        moduleID = MODULE_ID_DEX,
-        typeID = EVENT_NAME_POSITION_CREATED,
+        module = MODULE_NAME_DEX,
+        name = EVENT_NAME_POSITION_CREATED,
         data = {
             "senderAddress": senderAddress,
             "positionID": positionID,
@@ -779,7 +779,7 @@ def verify(trs: Transaction) -> None:
         raise Exception()
     if MIN_TICK > trs.params.tickLower
        or trs.params.tickLower >= trs.params.tickUpper
-       or trs.params.initialPosition.tickUpper > MAX_TICK:
+       or trs.params.tickUpper > MAX_TICK:
        raise Exception()
     if amount0Min > amount0Desired or amount1Min > amount1Desired:
         raise Exception()
@@ -796,8 +796,8 @@ def execute(trs: Transaction) -> None:
     (result, positionID) = createPosition(senderAddress, trs.params.poolID, trs.params.tickLower, trs.params.tickUpper)
     if result != POSITION_CREATION_SUCCESS:
         emitPersistentEvent(
-            moduleID = MODULE_ID_DEX,
-            typeID = EVENT_NAME_POSITION_CREATION_FAILED,
+            module = MODULE_NAME_DEX,
+            name = EVENT_NAME_POSITION_CREATION_FAILED,
             data = {
                 "senderAddress": senderAddress,
                 "poolID": trs.params.poolID,
@@ -820,21 +820,23 @@ def execute(trs: Transaction) -> None:
                                        trs.params.amount0Desired,
                                        trs.params.amount1Desired)
     (amount0, amount1) = updatePosition(positionID, liquidity, currentHeight)
+    token0 = getToken0Id(trs.params.poolID)
+    token1 = getToken1Id(trs.params.poolID)
 
     # check that amounts are within desired range (no large price slippage occurred)
     if amount0 < trs.params.amount0Min or amount1 < trs.params.amount1Min:
         # emit event explaining why the command execution failed
         emitPersistentEvent(
-            moduleID = MODULE_ID_DEX,
-            typeID = EVENT_NAME_AMOUNT_BELOW_MIN,
+            module = MODULE_NAME_DEX,
+            name = EVENT_NAME_AMOUNT_BELOW_MIN,
             data = {
                 "senderAddress": senderAddress,
                 "amount0": amount0,
                 "amount0Min": trs.params.amount0Min,
-                "tokenID0": trs.params.tokenID0,
+                "tokenID0": token0,
                 "amount1": amount1,
                 "amount1Min": trs.params.amount1Min,
-                "tokenID1": trs.params.tokenID1,
+                "tokenID1": token1,
             },
             topics = [senderAddress]
         )
@@ -849,17 +851,17 @@ def execute(trs: Transaction) -> None:
 
     # emit event about the successful position creation detailing the exact amounts added to the position
     emitEvent(
-        moduleID = MODULE_ID_DEX,
-        typeID = EVENT_NAME_POSITION_CREATED,
+        module = MODULE_NAME_DEX,
+        name = EVENT_NAME_POSITION_CREATED,
         data = {
             "senderAddress": senderAddress,
             "positionID": positionID,
             "tickLower": trs.params.tickLower,
             "tickUpper":  trs.params.tickUpper,
             "amount0": amount0,
-            "tokenID0": trs.params.tokenID0,
+            "tokenID0": token0,
             "amount1": amount1,
-            "tokenID1": trs.params.tokenID1,
+            "tokenID1": token1,
         },
         topics = [
             senderAddress,
@@ -966,8 +968,8 @@ def execute(trs: Transaction) -> None:
     if amount0 < trs.params.amount0Min or amount1 < trs.params.amount1Min:
         # emit event explaining why the command execution failed
         emitPersistentEvent(
-            moduleID = MODULE_ID_DEX,
-            typeID = EVENT_NAME_AMOUNT_BELOW_MIN,
+            module = MODULE_NAME_DEX,
+            name = EVENT_NAME_AMOUNT_BELOW_MIN,
             data = {
                 "senderAddress": senderAddress,
                 "amount0": amount0,
@@ -987,8 +989,8 @@ def execute(trs: Transaction) -> None:
 
     # emit event detailing the exact amounts added to the position
     emitEvent(
-        moduleID = MODULE_ID_DEX,
-        typeID = EVENT_NAME_POSITION_UDPATED,
+        module = MODULE_NAME_DEX,
+        name = EVENT_NAME_POSITION_UDPATED,
         data = {
             "senderAddress": senderAddress,
             "positionID": positionID,
@@ -1078,8 +1080,8 @@ def execute(trs: Transaction) -> None:
     if amount0 < trs.params.amount0Min or amount1 < trs.params.amount1Min:
         # emit event explaining why the command execution failed
         emitPersistentEvent(
-            moduleID = MODULE_ID_DEX,
-            typeID = EVENT_NAME_AMOUNT_BELOW_MIN,
+            module = MODULE_NAME_DEX,
+            name = EVENT_NAME_AMOUNT_BELOW_MIN,
             data = {
                 "senderAddress": senderAddress,
                 "amount0": amount0,
@@ -1095,8 +1097,8 @@ def execute(trs: Transaction) -> None:
 
     # emit event detailing the exact amounts added to the position
     emitEvent(
-        moduleID = MODULE_ID_DEX,
-        typeID = EVENT_NAME_POSITION_UDPATED,
+        module = MODULE_NAME_DEX,
+        name = EVENT_NAME_POSITION_UDPATED,
         data = {
             "senderAddress": senderAddress,
             "positionID": positionID,
@@ -1177,8 +1179,8 @@ checkPositionExistenceAndOwnership(senderAddress: Address, positionID: PositionI
     # check position existence
     if trs.params.positionID does not exist in Positions substore:
         emitPersistentEvent(
-            moduleID = MODULE_ID_DEX,
-            typeID = EVENT_NAME_POSITION_UDPATE_FAILED,
+            module = MODULE_NAME_DEX,
+            name = EVENT_NAME_POSITION_UDPATE_FAILED,
             data = {
                 "senderAddress": senderAddress,
                 "positionID": positionID,
@@ -1192,8 +1194,8 @@ checkPositionExistenceAndOwnership(senderAddress: Address, positionID: PositionI
     # check transaction sender is position owner
     if senderAddress != getOwnerAddressOfPosition(positionID):
         emitPersistentEvent(
-            moduleID = MODULE_ID_DEX,
-            typeID = EVENT_NAME_POSITION_UDPATE_FAILED,
+            module = MODULE_NAME_DEX,
+            name = EVENT_NAME_POSITION_UDPATE_FAILED,
             data = {
                 "senderAddress": senderAddress,
                 "positionID": positionID,
@@ -1242,10 +1244,10 @@ def collectFeesAndIncentives(positionID: PositionID, currentHeight: int) -> None
 
     # emit an event providing information about the collected fees and incentives
     emitEvent(
-        moduleID = MODULE_ID_DEX,
-        typeID = EVENT_NAME_FEES_INCENTIVES_COLLECTED,
+        module = MODULE_NAME_DEX,
+        name = EVENT_NAME_FEES_INCENTIVES_COLLECTED,
         data = {
-            "senderAddress": senderAddress,
+            "senderAddress": ownerAddress,
             "positionID": positionID,
             "collectedFees0": collectableFees0,
             "tokenID0": getToken0Id(poolID),
@@ -1255,7 +1257,7 @@ def collectFeesAndIncentives(positionID: PositionID, currentHeight: int) -> None
             "tokenIDIncentives": TOKEN_ID_INCENTIVES
         },
         topics = [
-            senderAddress,
+            ownerAddress,
             positionID
         ]
     )
@@ -1374,7 +1376,7 @@ This internal function is used to create a new liquidity pool with the provided 
 ##### Execution
 
 ```python
-def createPool(tokenID0: TokenID, tokenID1: TokenID, feeTier: uint32, initialSqrtPrice: Q96) -> uint32:
+def createPool(tokenID0: TokenID, tokenID1: TokenID, feeTier: uint32, initialSqrtPrice: Q96, currentHeight: int) -> uint32:
     # check validity of input parameters
     if there is no entry s in dexGlobalData.poolCreationSettings with s.feeTier == feeTier:
         return POOL_CREATION_FAILED_INVALID_FEE_TIER
@@ -1389,6 +1391,7 @@ def createPool(tokenID0: TokenID, tokenID1: TokenID, feeTier: uint32, initialSqr
         "liquidity": 0,
         "sqrtPrice": initialSqrtPrice,
         "incentivesPerLiquidityAccumulator": q96ToBytes(Q96(0)),
+        "heightIncentivesUpdate": currentHeight,
         "feeGrowthGlobal0": q96ToBytes(Q96(0)),
         "feeGrowthGlobal1": q96ToBytes(Q96(0)),
         "tickSpacing": poolSetting.tickSpacing
@@ -1649,14 +1652,14 @@ def updatePosition(positionID: PositionID, liquidityDelta: int64, currentHeight:
         ownerAddress = getOwnerAddressOfPosition(positionID)
 
         emitPersistentEvent(
-            moduleID = MODULE_ID_DEX,
-            typeID = EVENT_NAME_POSITION_UDPATE_FAILED,
+            module = MODULE_NAME_DEX,
+            name = EVENT_NAME_POSITION_UDPATE_FAILED,
             data = {
-                "senderAddress": senderAddress,
+                "senderAddress": ownerAddress,
                 "positionID": positionID,
                 "result": POSITION_UPDATE_FAILED_INSUFFICIENT_LIQUIDITY
             },
-            topics = [senderAddress, positionID]
+            topics = [ownerAddress, positionID]
         )
         raise Exception()
 
