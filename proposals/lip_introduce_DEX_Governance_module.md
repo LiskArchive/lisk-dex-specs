@@ -1,0 +1,1060 @@
+```
+LIP: <LIP number>
+Title:  Introduce DEX Governance module
+Author: Sergey Shemyakov <sergey.shemyakov@lightcurve.io>
+Type: Standards Track
+Created: <YYYY-MM-DD>
+Updated: <YYYY-MM-DD>
+Required: LIP 0048, 0051, 0057
+```
+
+## Abstract
+
+This LIP introduces the DEX Governance module that allows creating proposals and voting on them on-chain in a decentralized manner. Proposals can have immediate on-chain consequences or can require an off-chain implementation after being accepted. The module uses the native token of the DEX sidechain as a governance token.
+
+## Copyright
+
+This LIP is licensed under the [Creative Commons Zero 1.0 Universal](https://creativecommons.org/publicdomain/zero/1.0/).
+
+## Motivation
+
+The DEX Governance module allows creating pool incentivization proposals and universal proposals. The motivation for the two types of proposals is slightly different.
+
+The reward system of the DEX includes incentivizing liquidity providers in certain pools deemed important for the ecosystem (see [DEX Incentives module][dexIncentivesModule]).
+Practically, it is impossible to incentivize all liquidity pools, since the rewards will be diluted and the system could be easily abused.
+So there is a decision to be made: which pools are considered important?
+In a decentralized exchange the best way to make these decisions is by letting the community vote on the incentivization in a decentralized manner.
+Thus the DEX Rewards module requires DEX Governance to function properly.
+
+In addition to the specific vote on incentivizing a pool, the DEX Governance module allows proposing and voting on other issues concerning the future direction and development of the DEX project.
+This is especially important for a DeFi project, since the degree of transparency of governance may be a decisive factor for investors.
+
+## Rationale
+
+See the Terminology subsection below for clarifications on technical notions appearing in Rationale.
+
+### Creating a proposal
+
+Any account on the DEX sidechain at any time can create a proposal to be voted on, as long as the account has a sufficient amount of DEX native tokens and the proposal registration fee is paid (see `MINIMAL_BALANCE_PROPOSE` and `FEE_PROPOSAL_CREATION` in the [table of constants](#notation-and-constants)).
+The imposed minimal balance and fees are supposed to ensure that only important proposals are created and the attention of the community is not wasted on insignificant protocol changes.
+
+The proposal content depends on the type of proposal: incentivization proposals must include a pool ID of the incentivized pool, while a universal proposal must include the proposal text.
+
+The proposal text should completely specify the suggested changes in a universal proposal.
+It can also make an argument for incentivizing a pool in an incentivization proposal.
+Since the proposal is stored on-chain and must be submitted entirely in a single block, the only requirement to the proposal text is a size limit of `MAX_LENGTH_PROPOSAL_TEXT` bytes.
+Keeping proposals on-chain guarantees that all blockchain nodes have immediate access to the complete proposal text and do not have to rely on any other services.
+We recommend using the [Markdown format](https://www.markdownguide.org/) for the proposal text.
+If the proposal size limit is too restrictive for a particular proposal, we advise to include a link to a document with extra information as well as the hash of this document in the proposal text.
+
+Additionally, every proposal is required to contain metadata.
+Proposal `title`, `author` and `summary` fields are mandatory, `discussionsTo` can be used to store a URL of a webpage with discussions of the proposal.
+Metadata helps users and services to fetch succinct proposal data.
+
+### Voting on a proposal
+
+Any account on the DEX sidechain can vote on any currently active proposal.
+To do this, the account has to lock DEX native tokens in PoS staking and cast a vote command for a particular proposal with a particular decision.
+The amount of the PoS staked tokens will be added to the total votes for the chosen decision.
+
+The introduced dependency on the [PoS module][posModule] strengthens the security of the DEX sidechain: in order to participate in governance, an account must participate in staking for a validator.
+On-chain governance does not make sense for a PoA blockchain, since in this case all governmental decisions are made by the authorities and not by token holders.
+
+Note that voting with the tokens locked in liquidity pools is not supported since price fluctuations constantly change the actual amount of these tokens.
+
+### Proposal lifecycle
+
+After a proposal is registered on-chain, users have a certain period of time to vote on it (see `VOTE_DURATION` in the [table of constants](#notation-and-constants)). A proposal can be active for at most `VOTE_DURATION` blocks, including the block when it was created.
+When half of this period has elapsed, the vote quorum is checked.
+This means that a certain percentage of the total supply of DEX native tokens should have acknowledged the existence of the proposal by voting on it (see `QUORUM_PERCENTAGE` in the [table of constants](#notation-and-constants)).
+If the quorum is not reached, then the proposal fails prematurely and no additional votes on it are registered.
+The quorum guarantees that the proposal got sufficient attention from the community.
+The midterm quorum check makes sure that the community has enough time to discuss important proposals that gained enough attention.
+
+Users can vote on the proposal with "Yes", "No" and "Pass".
+The "Pass" option shows that a user agrees with the importance of the proposal and the need to make a decision on it, but does not have a particular opinion themself.
+All the "Pass" votes count towards the quorum.
+
+User vote decisions are registered on-chain, which allows to recast votes with a different decision and token amount.
+For the storage reasons, decisions for only a certain number of the live proposals could be recorded, which limits the total number of simultaneous proposals (see `MAX_NUMBER_LIVE_PROPOSALS` in the [table of constants](#notation-and-constants)).
+The proposal is considered to be live if its vote duration has not ended, independently of whether the quorum passed or failed.
+Proposals which are not live are called archived.
+The user voting information is not stored for archived proposals, only the proposal information is (for example, creation height, total votes, final conclusion).
+
+### Turnout bias
+
+Once the proposal duration elapses, the vote on the proposal is concluded by checking the amount of votes Yes, No and Pass.
+The required number of Yes votes to accept a proposal depends on the vote turnout, i.e., on the amount of tokens that participated in the vote. We refer to this dependency as turnout bias.
+
+The use of turnout bias implies that at low turnout the voters must be much more unanimous to pass a proposal.
+If only a small amount of voting power is making a decision, there should be a clear consensus among the voters.
+
+The DEX Governance module uses the following turnout bias scheme: a proposal is accepted if
+
+$$ \frac{Yes}{\sqrt{electorate}} > \frac{No}{\sqrt{turnout}}, $$
+
+where turnout denotes the total number of DEX native tokens that participated in the vote (including Pass decisions), electorate denotes the total supply of DEX native tokens. Here is an overview of approval values (i.e., the ratio #Yes / (#Yes + #No)) required to accept a proposal for certain values of turnout, measured in percentage of electorate.
+
+|   **Turnout**, % of electorate    |   **Approval needed to accept**   |
+|-----------------------------------|-----------------------------------|
+|               10%                 |                  76%              |
+|               20%                 |                  69%              |
+|               30%                 |                  64%              |
+|               50%                 |                  58%              |
+
+## Specification
+
+The DEX Governance module has the name `MODULE_NAME_DEX_GOVERNANCE`.
+
+### Terminology
+
+This LIP uses the following terms:
+
+- The **electorate** or the total voting power is the total supply of DEX native tokens. It represents the collection of all the tokens that can be used to vote on a proposal.
+- A **turnout** of a vote for a particular proposal is the total number of DEX native tokens that were used to cast a vote for this proposal.
+- A **quorum** is the minimal percentage of the electorate that must vote on a proposal. Proposal fails if the quorum is not reached.
+- A **voting scheme** is an algorithm determining whether a proposal was accepted or failed for a given amount of votes Yes, No and Pass.
+- A **turnout bias voting scheme** is a voting scheme that takes into account the ratio of turnout to the electorate. For example, a turnout bias voting scheme could require more unanimous vote outcomes for lower vote participation.
+- A **pool incentivization proposal** is a proposal type in the DEX Governance module that requests modifying the list of incentivized liquidity pools. Once accepted, this proposal has immediate on-chain consequences.
+- A **universal proposal** is a proposal type in the DEX Governance module that can request arbitrary DEX-related actions, for example, changes in protocol, UI or even project strategy. Once accepted, this proposal is acted upon off-chain.
+- An **active proposal** is a proposal in the DEX Governance module that users can vote on.
+- A **live proposal** is a proposal in the DEX Governance module for which all voter decisions are still stored. The number of live proposals is limited.
+
+### Types
+
+| **Name**                  |   **Type**        |       **Validation**       |       **Description**                                 |
+|---------------------------|-------------------|-----------------------|-------------------------------------------------------|
+|   Proposal                |   object          | Must satisfy `proposalSchema`.| Object containing information of a particular proposal.|
+|   Address                 |   bytes           | Must have length `LENGTH_ADDRESS`.| Account address in Lisk ecosystem.              |
+
+
+### Notation and Constants
+
+We define the following constants:
+
+| **Name**                  |   **Type**        |       **DEX sidechain value**       |       **Description**                                 |
+|---------------------------|-------------------|-----------------------|-------------------------------------------------------|
+|`TOKEN_ID_DEX_NATIVE`|`bytes`|TBD|Token ID of the native token of DEX sidechain.|
+|`VOTE_DURATION`|`uint32`|260000|Length of the vote period in blocks. This LIP assumes that the constant `LOCKING_PERIOD_STAKES` of [LIP 57][posModule] satisfies: `VOTE_DURATION >= LOCKING_PERIOD_STAKES` so the PoS locked tokens cannot be unlocked and used twice to vote from two different accounts. For the same reason the outcome of a proposal is checked before executing any block transactions (see [`beforeTransactionsExecute` hook](#before-transactions-execution)).|
+|`QUORUM_DURATION`|`uint32`|130000|Length of the quorum period in blocks. After this period the quorum is checked.|
+|`FEE_PROPOSAL_CREATION`|`uint64`|5000 * 10^8|Amount of fee to be paid for proposal creation in DEX native tokens.|
+|`MINIMAL_BALANCE_PROPOSE`|`uint64`|100000 * 10^8|Minimal amount of DEX native tokens an account should have to create a proposal (including PoS locked tokens).|
+|`QUORUM_PERCENTAGE`|`uint32`|10000|Relative amount of votes required for a proposal to pass the quorum, in parts-per-million of the amount of the total supply.|
+|`MAX_NUMBER_LIVE_PROPOSALS`|`uint32`|100|Maximal number of proposals allowed to exist simultaneously.|
+|`MAX_LENGTH_PROPOSAL_TEXT`|`uint32`|10*1024|The maximal allowed length for proposal text, in bytes.|
+|`MAX_LENGTH_METADATA_TITLE`|`uint32`|124|The maximal allowed length for data in the `title` property in proposal metadata, in bytes. |
+|`MAX_LENGTH_METADATA_AUTHOR`|`uint32`|200|The maximal allowed length for data in the `author` property in proposal metadata, in bytes. |
+|`MAX_LENGTH_METADATA_SUMMARY`|`uint32`|500|The maximal allowed length for `summary` property of proposal metadata, in bytes.|
+|`MAX_LENGTH_METADATA_LINK`|`uint32`|200|The maximal allowed length for `discussionsTo` property of proposal metadata, in bytes.|
+|`LENGTH_PROPOSAL_ID`|`uint32`|4|The number of bytes of a proposal ID.|
+|`LENGTH_POOL_ID`|`uint32`|20|The number of bytes of a DEX pool ID.|
+|`LENGTH_ADDRESS`|`uint32`|20|The number of bytes of an address.|
+|`MODULE_NAME_DEX_GOVERNANCE`|`string`|"dexGovernance"|Name of the DEX Governance module.|
+|`SUBSTORE_PREFIX_PROPOSALS`|`bytes`|`0x0000`|Substore prefix of the proposals substore.|
+|`SUBSTORE_PREFIX_VOTES`|`bytes`|`0x8000`|Substore prefix of the votes substore.|
+|`SUBSTORE_PREFIX_INDEX`|`bytes`|`0xc000`|Substore prefix of the index substore.|
+|`COMMAND_CREATE_PROPOSAL`|`string`|"createProposal"|Command name of the create proposal command.|
+|`COMMAND_VOTE_ON_PROPOSAL`|`string`|"voteOnProposal"|Command name of the vote command. |
+|`EVENT_NAME_PROPOSAL_CREATED`|`string`|"proposalCreated"| Event name of the Proposal Created event. |
+|`EVENT_NAME_PROPOSAL_CREATION_FAILED`|`string`|"proposalCreationFailed"| Event name of the Proposal Creation Failed event.|
+|`EVENT_NAME_PROPOSAL_QUORUM_CHECKED`|`string`|"proposalQuorumChecked"| Event name of the Proposal Quorum Checked event.|
+|`EVENT_NAME_PROPOSAL_OUTCOME_CHECKED`|`string`|"proposalOutcomeChecked"| Event name of the Proposal Outcome Checked event.|
+|`EVENT_NAME_PROPOSAL_VOTED`|`string`|"proposalVoted"| Event name of the Proposal Voted event.|
+|`CREATION_FAILED_TOO_MANY_LIVE`|`uint32`| 0 | Event error code for failed proposal creation when the limit of live proposals is reached. |
+|`CREATION_FAILED_NO_POOL`|`uint32`| 1 | Event error code for failed incentivization proposal creation when the incentivized pool does not exist. |
+|`PROPOSAL_TYPE_UNIVERSAL`|`uint32`|0|Code for universal type proposals.|
+|`PROPOSAL_TYPE_INCENTIVIZATION`|`uint32`|1|Code for incentivization type proposals.|
+|`PROPOSAL_STATUS_ACTIVE`|`uint32`|0|Status for a currently active proposal.|
+|`PROPOSAL_STATUS_FINISHED_ACCEPTED`|`uint32`|1|Status for a finished proposal that was accepted.|
+|`PROPOSAL_STATUS_FINISHED_FAILED`|`uint32`|2|Status for a finished proposal that passed the quorum check but failed the vote.|
+|`PROPOSAL_STATUS_FAILED_QUORUM`|`uint32`|3|Status for a proposal that has ended because of failed quorum after quorum duration had elapsed.|
+|`DECISION_YES`|`uint32`|0|Code for the vote decision "Yes".|
+|`DECISION_NO`|`uint32`|1|Code for the vote decision "No".|
+|`DECISION_PASS`|`uint32`|2|Code for the vote decision "Pass".|
+
+### State Store
+
+The key-value pairs in the module store are organized as follows.
+
+#### Proposals substore
+
+##### Substore Prefix, Store Key, and Store Value
+
+- The substore prefix is set to `SUBSTORE_PREFIX_PROPOSALS`.
+- Each store key given by `index.to_bytes(4, byteorder='big')` for the corresponding proposal index `index`. The store key is a byte array of length `LENGTH_PROPOSAL_ID`.
+- Each store value is the serialization of an object following the JSON schema `proposalSchema` presented below.
+- Notation: For the rest of this proposal let `proposalsStore[index]` be the object value stored in the proposals substore with store key `index.to_bytes(4, byteorder='big')`, deserialized using `proposalSchema`.
+
+##### JSON Schema
+
+```java
+proposalSchema = {
+    "type": "object",
+    "required": [
+        "creationHeight",
+        "votesYes",
+        "votesNo",
+        "votesPass",
+        "type",
+        "content",
+        "status"
+    ],
+    "properties": {
+        "creationHeight": {
+            "dataType": "uint32",
+            "fieldNumber": 1
+        },
+        "votesYes": {
+            "dataType": "uint64",
+            "fieldNumber": 2
+        },
+        "votesNo": {
+            "dataType": "uint64",
+            "fieldNumber": 3
+        },
+        "votesPass": {
+            "dataType": "uint64",
+            "fieldNumber": 4
+        },
+        "type": {
+            "dataType": "uint32",
+            "fieldNumber": 5
+        },
+        "content": {
+            "fieldNumber": 6,
+            ...proposalContentSchema
+        },
+        "status": {
+            "dataType": "uint32",
+            "fieldNumber": 7
+        }
+    }
+}
+
+proposalContentSchema = {
+    "type": "object",
+    "required": ["text", "poolID", "multiplier", "metadata"],
+    "properties": {
+        "text": {
+            "dataType": "bytes",
+            "maxLength": MAX_LENGTH_PROPOSAL_TEXT,
+            "fieldNumber": 1
+        },
+        "poolID": {
+            "dataType": "bytes",
+            "maxLength": LENGTH_POOL_ID,
+            "fieldNumber": 2
+        },
+        "multiplier": {
+            "dataType": "uint32",
+            "fieldNumber": 3
+        },
+        "metadata": {
+            "type": "object",
+            "required": ["title", "author", "summary", "discussionsTo"],
+            "fieldNumber": 4,
+            "properties": {
+                "title": {
+                    "dataType": "bytes",
+                    "minLength": 1,
+                    "maxLength": MAX_LENGTH_METADATA_TITLE,
+                    "fieldNumber": 1
+                },
+                "author": {
+                    "dataType": "bytes",
+                    "minLength": 1,
+                    "maxLength": MAX_LENGTH_METADATA_AUTHOR,
+                    "fieldNumber": 2
+                },
+                "summary": {
+                    "dataType": "bytes",
+                    "minLength": 1,
+                    "maxLength": MAX_LENGTH_METADATA_SUMMARY,
+                    "fieldNumber": 3
+                },
+                "discussionsTo": {
+                    "dataType": "bytes",
+                    "maxLength": MAX_LENGTH_METADATA_LINK,
+                    "fieldNumber": 4
+                }
+            }
+        }
+    }
+}
+```
+
+##### Properties
+
+- `creationHeight`: The block height when the proposal was submitted.
+- `votesYes`: The current staked amount voting "Yes" on the proposal.
+- `votesNo`: The current staked amount voting "No" on the proposal.
+- `votesPass`: The current staked amount voting "Pass" on the proposal.
+- `type`: The type of the proposal. Allowed values are `PROPOSAL_TYPE_UNIVERSAL` and `PROPOSAL_TYPE_INCENTIVIZATION`.
+- `content`: An object with the content of the proposal. Contains the following fields:
+    - `text`: Byte array with the complete description of the proposal.
+    - `poolID`: Byte array of the pool ID to be incentivized in case of incentivization proposal. This field must be left empty for universal proposals.
+    - `multiplier`: The multiplier of the pool to be incentivized in case of incentivization proposal. This field must be set to 0 for universal proposals.
+    - `metadata`: An object with proposal metadata, i.e., title, author, summary and link to a webpage with the discussion of the proposal. The fields `title`, `author` and `summary` are expected to be filled, the field `discussionsTo` can be left empty.
+- `status`: The current status of the proposal. Allowed values are: `PROPOSAL_STATUS_ACTIVE`, `PROPOSAL_STATUS_FINISHED_ACCEPTED`, `PROPOSAL_STATUS_FINISHED_FAILED`, `PROPOSAL_STATUS_FAILED_QUORUM`.
+
+#### Votes substore
+
+##### Substore Prefix, Store Key, and Store Value
+
+- The substore prefix is set to `SUBSTORE_PREFIX_VOTES`.
+- Each store key is a voter address given as a byte array of length `LENGTH_ADDRESS`.
+- Each store value is the serialization of an object following the JSON schema `votesSchema` presented below.
+- Notation: For the rest of this proposal let `votesStore[address]` be the object value stored in the votes substore with store key `address`, deserialized using `votesSchema`. Also `votesStore[address][i]` will denote the `i`-th object of the array `votesStore[address]`.
+
+##### JSON Schema
+
+```java
+votesSchema = {
+    "type": "object",
+    "required": ["voteInfos"],
+    "properties": {
+        "voteInfos": {
+            "fieldNumber": 1,
+            "type": "array",
+            "items": {
+                "type": "object",
+                "required": ["proposalIndex", "decision", "amount"],
+                "properties": {
+                    "proposalIndex": {
+                        "dataType": "uint32",
+                        "fieldNumber": 1
+                    },
+                    "decision": {
+                        "dataType": "uint32",
+                        "fieldNumber": 2
+                    },
+                    "amount": {
+                        "dataType": "uint64",
+                        "fieldNumber": 3
+                    }
+                }
+            }
+        }
+    }
+}
+```
+
+##### Properties
+
+- `voteInfos`: An array containing information about the votes cast from the address. Logically the array is structured as a queue (FIFO) and its length is limited by `MAX_NUMBER_LIVE_PROPOSALS`. An element of `voteInfos` includes:
+    - `proposalIndex`: The index of the proposal for which the vote was cast.
+    - `decision`: The decision cast by the voter.
+    - `amount`: The staked amount of tokens when casting the vote.
+
+#### Index substore
+
+##### Substore Prefix, Store Key, and Store Value
+- The substore prefix is set to `SUBSTORE_PREFIX_INDEX`.
+- The store key is empty bytes.
+- Each store value is the serialization of an object following the JSON schema `indexSchema` presented below.
+- Notation: For the rest of this proposal let `indexStore` be the object value stored in the index substore with store key empty bytes, deserialized using `indexSchema`.
+
+##### JSON Schema
+
+```java
+indexSchema = {
+    "type": "object",
+    "required": [
+        "newestIndex",
+        "nextOutcomeCheckIndex",
+        "nextQuorumCheckIndex"
+    ],
+    "properties": {
+        "newestIndex": {
+            "type": "uint32",
+            "fieldNumber": 1
+        },
+        "nextOutcomeCheckIndex": {
+            "type": "uint32",
+            "fieldNumber": 2
+        },
+        "nextQuorumCheckIndex": {
+            "type": "uint32",
+            "fieldNumber": 3
+        }
+    }
+}
+```
+
+##### Properties
+- `newestIndex`: The proposal index of the last created proposal.
+- `nextOutcomeCheckIndex`: The proposal index of the next proposal for which the vote duration still has not elapsed. Note that this proposal could be not active if it failed quorum.
+- `nextQuorumCheckIndex`: The proposal index of the oldest active proposal for which the quorum was not yet checked.
+
+### Commands
+
+#### create proposal command
+
+This command creates a new pool incentivization or universal proposal. It has the command name `COMMAND_CREATE_PROPOSAL`.
+
+##### Parameters
+
+```java
+createProposalParamsSchema = {
+    "type": "object",
+    "required": ["type", "content"],
+    "properties": {
+        "type": {
+            "dataType": "uint32",
+            "fieldNumber": 1
+        },
+        "content": {
+            "fieldNumber": 2,
+            ...proposalContentSchema
+        }
+    }
+}
+```
+
+- `type`: The type of the proposal. Allowed values are `PROPOSAL_TYPE_UNIVERSAL` and `PROPOSAL_TYPE_INCENTIVIZATION`.
+- `content`: The object with the content of the proposal as specified in the proposals substore.
+
+##### Verification
+
+The function [getAvailableBalance][getAvailableBalance] is defined in the Token module, [getLockedVotedAmount][getLockedVotedAmount] in the PoS module and [poolExists][poolExists] in the DEX module.
+
+```python
+def verify(trs: Transaction) -> None:
+    senderAddress = SHA256(trs.senderPublicKey)[:LENGTH_ADDRESS]
+    availableBalance = Token.getAvailableBalance(senderAddress, TOKEN_ID_DEX_NATIVE)
+    lockedBalance = PoS.getLockedVotedAmount(senderAddress)
+    if availableBalance + lockedBalance < MINIMAL_BALANCE_PROPOSE:
+        raise Exception("Insufficient DEX native token balance to create proposal")
+    if availableBalance < FEE_PROPOSAL_CREATION:
+        raise Exception("Insufficient balance to pay proposal creation fee")
+
+    type = trs.params.type
+    content = trs.params.content
+    if type == PROPOSAL_TYPE_INCENTIVIZATION:
+        if length(content.poolID) != NUM_BYTES_POOL_ID:
+            raise Exception("Pool ID must be provided for an incentivization proposal")
+    elif type == PROPOSAL_TYPE_UNIVERSAL:
+        if length(content.text) == 0:
+            raise Exception("Proposal text can not be empty for universal proposal")
+        if length(content.poolId) != 0 or content.multiplier != 0:
+            raise Exception("For universal proposals, pool ID must be empty and multiplier must be set to 0")
+    else:
+        raise Exception("Invalid proposal type")
+```
+##### Execution
+
+The function [payFee][payFee] is defined in the Fee module.
+
+```python
+def execute(trs: Transaction) -> None:
+    # non-trivial verificaiton checks
+    if not hasEnded(indexStore.newestIndex - MAX_NUMBER_LIVE_PROPOSALS + 1, currentHeight, VOTE_DURATION):
+        emitProposalCreationFailedEvent(CREATION_FAILED_TOO_MANY_LIVE)
+        raise Exception("Limit number of live proposals was reached")
+    if trs.params.type == PROPOSAL_TYPE_INCENTIVIZATION and not DEX.poolExists(content.poolID):
+        emitProposalCreationFailedEvent(CREATION_FAILED_NO_POOL)
+        raise Exception("Incentivized pool does not exist")
+
+    # command execution
+    Fee.payFee(trs.params.proposalFee)
+    index = indexStore.newestIndex + 1
+    currentHeight = height of the block containing trs
+    proposalsStore[index] = encode(proposalSchema, {
+        "creationHeight": currentHeight,
+        "votesYes": 0,
+        "votesNo": 0,
+        "votesPass": 0,
+        "type": trs.params.type,
+        "content": trs.params.content,
+        "status": PROPOSAL_STATUS_ACTIVE
+    })
+    indexStore.newestIndex = index
+
+    senderAddress = SHA256(trs.senderPublicKey)[:LENGTH_ADDRESS]
+    emitEvent(
+        module = MODULE_NAME_DEX_GOVERNANCE,
+        name = EVENT_NAME_PROPOSAL_CREATED,
+        data = {
+            "creator": senderAddress,
+            "index": index,
+            "type": trs.params.type
+        },
+        topics = [index.to_bytes(4, byteorder='big')]
+    )
+
+def emitProposalCreationFailedEvent(reason: int) -> None:
+    emitPersistentEvent(
+        module = MODULE_NAME_DEX_GOVERNANCE,
+        name = EVENT_NAME_PROPOSAL_CREATION_FAILED,
+        data = {"reason": reason},
+        topics = []
+    )
+```
+
+#### vote on proposal command
+
+This command submits votes with a particular decision for a given active proposal from the sender address. It also can be used to change the voting decision of the address, or to increase the votes if additional tokens were locked for voting. It has the command name `COMMAND_VOTE_ON_PROPOSAL`.
+
+##### Parameters
+
+```java
+voteOnProposalParamsSchema = {
+    "type": "object",
+    "required": ["proposalIndex", "decision"],
+    "properties": {
+        "proposalIndex": {
+            "dataType": "uint32",
+            "fieldNumber": 1
+        },
+        "decision": {
+            "dataType": "uint32",
+            "fieldNumber": 2
+        }
+    }
+}
+```
+
+- `proposalIndex`: The index of the proposal for which the vote is cast.
+- `decision`: The code for the chosen vote decision for the proposal. Allowed values are: `DECISION_YES`, `DECISION_NO`, `DECISION_PASS`.
+
+##### Verification
+
+```python
+def verify(trs: Transaction) -> None:
+    if proposalsStore[trs.params.proposalIndex] does not exist:
+        raise Exception("Proposal does not exist")
+    if trs.params.decision > 2:
+        raise Exception("Decision does not exist")
+    if proposalsStore[trs.params.proposalIndex].status != PROPOSAL_STATUS_ACTIVE:
+        raise Exception("Proposal is not active")
+```
+
+##### Execution
+
+The function [getLockedVotedAmount][getLockedVotedAmount] is defined in the PoS module.
+
+```python
+def execute(trs: Transaction) -> None:
+    index = trs.params.proposalIndex
+    senderAddress = SHA256(trs.senderPublicKey)[:LENGTH_ADDRESS]
+    currentHeight = height of the block containing trs
+    stakedAmount = PoS.getLockedVotedAmount(senderAddress)
+    if votesStore[senderAddress] does not exist:
+        votesStore[senderAddress] = []
+
+    newVoteInfo = {
+        "proposalIndex": index,
+        "decision": trs.params.decision,
+        "amount": stakedAmount
+    }
+    if votesStore[senderAddress] contains voteInfo with voteInfo.proposalIndex == index:
+        # deduce if the previous saved votes are for the current proposal
+        addVotes(index, -voteInfo.amount, voteInfo.decision)
+        replace voteInfo with newVoteInfo in votesStore[senderAddress]
+    elif length(votesStore[address]) < MAX_NUMBER_LIVE_PROPOSALS:
+        # append info about the vote to the vote infos queue
+        votesStore[senderAddress].append(newVoteInfo)
+    else:
+        # replace the oldest element in the vote infos queue withe the newest
+        replace an element voteInfo with smallest voteInfo.proposalIndex with newVoteInfo in votesStore[senderAddress]
+    # vote
+    addVotes(index, stakedAmount, trs.params.decision)
+
+    emitEvent(
+        module = MODULE_NAME_DEX_GOVERNANCE,
+        name = EVENT_NAME_PROPOSAL_VOTED,
+        data = {
+            "index": index,
+            "voterAddress": senderAddress,
+            "decision": trs.params.decision,
+            "amount": stakedAmount
+        },
+        topics = [senderAddress, index.to_bytes(4, byteorder='big')]
+    )
+```
+
+### Events
+
+#### Proposal Created
+
+This event is emitted when a new proposal is created. The name of this event is `EVENT_NAME_PROPOSAL_CREATED`.
+
+##### Topics
+
+- `index`: The index of the created proposal.
+
+##### Data
+
+```java
+proposalCreatedEventDataSchema = {
+    "type": "object",
+    "required": ["creator", "index", "type"],
+    "properties": {
+        "creator": {
+            "dataType": "bytes",
+            "length": NUM_BYTES_ADDRESS,
+            "fieldNumber": 1
+        },
+        "index": {
+            "dataType": "uint32",
+            "fieldNumber": 2
+        },
+        "type": {
+            "dataType": "uint32",
+            "fieldNumber": 3
+        }
+    }
+}
+```
+
+- `creator`: The address that created the proposal.
+- `index`: The index of the created proposal.
+- `type`: The type of the created proposal. Allowed values are `PROPOSAL_TYPE_UNIVERSAL` and `PROPOSAL_TYPE_INCENTIVIZATION`.
+
+#### Proposal Creation Failed
+
+This event is emitted when a proposal creation fails. The name of this event is `EVENT_NAME_PROPOSAL_CREATION_FAILED`.
+
+##### Data
+
+```java
+proposalCreationFailedEventDataSchema = {
+    "type": "object",
+    "required": ["reason"],
+    "properties": {
+        "reason": {
+            "dataType": "uint32",
+            "fieldNumber": 1
+        }
+    }
+}
+```
+
+Allowed values for `reason` are: `CREATION_FAILED_TOO_MANY_LIVE`, `CREATION_FAILED_NO_POOL`.
+
+#### Proposal Quorum Checked
+
+This event is emitted after the quorum condition was checked for a proposal. The name of this event is `EVENT_NAME_PROPOSAL_QUORUM_CHECKED`.
+
+##### Topics
+
+- `index`: The index of the proposal, for which the quorum was checked.
+
+##### Data
+
+```java
+proposalQuorumCheckedEventDataSchema = {
+    "type": "object",
+    "required": ["index", "status"],
+    "properties": {
+        "index": {
+            "dataType": "uint32",
+            "fieldNumber": 1
+        },
+        "status": {
+            "dataType": "uint32",
+            "fieldNumber": 2
+        }
+    }
+}
+```
+
+- `index`: The index of the created proposal.
+- `status`: The status of the proposal after the quorum check. Possible values are: `PROPOSAL_STATUS_ACTIVE` and `PROPOSAL_STATUS_FAILED_QUORUM`.
+
+#### Proposal Outcome Checked
+
+This event is emitted after the outcome of a particular proposal is checked. The name of this event is `EVENT_NAME_PROPOSAL_OUTCOME_CHECKED`.
+
+##### Topics
+
+- `index`: The index of the proposal, for which the outcome was checked.
+
+##### Data
+
+```java
+proposalOutcomeCheckedEventDataSchema = {
+    "type": "object",
+    "required": ["index", "status"],
+    "properties": {
+        "index": {
+            "dataType": "uint32",
+            "fieldNumber": 1
+        },
+        "status": {
+            "dataType": "uint32",
+            "fieldNumber": 2
+        }
+    }
+}
+```
+
+- `index`: The index of the created proposal.
+- `status`: The status of the proposal after the outcome check. Possible values are: `PROPOSAL_STATUS_FINISHED_ACCEPTED`, `PROPOSAL_STATUS_FINISHED_FAILED`.
+
+#### Proposal Voted
+
+This event is emitted after a user voted on a particular proposal. The name of this event is `EVENT_NAME_PROPOSAL_VOTED`
+
+##### Topics
+
+- `voterAddress`: The address of the account that cast a vote.
+- `index`: The index of the proposal that was voted on.
+
+##### Data
+
+```java
+proposalVotedEventSchema = {
+    "type": "object",
+    "required": [
+        "index",
+        "voterAddress",
+        "decision",
+        "amount"
+    ],
+    "properties": {
+        "index": {
+            "dataType": "uint32",
+            "fieldNumber": 1
+        },
+        "voterAddress": {
+            "dataType": "bytes",
+            "length": LENGTH_ADDRESS,
+            "fieldNumber": 2
+        },
+        "decision": {
+            "dataType": "uint32",
+            "fieldNumber": 3
+        },
+        "amount": {
+            "dataType": "uint64",
+            "fieldNumber": 4
+        }
+    }
+}
+```
+
+- `index`: The index of the proposal that was voted on.
+- `voterAddress`: The address of the account that cast a vote.
+- `decision`: The code for the chosen vote decision for the proposal. Allowed values are: `DECISION_YES`, `DECISION_NO`, `DECISION_PASS`.
+- `amount`: The number of votes.
+
+### Internal functions
+
+#### hasEnded
+
+The function checks whether a given proposal was created more than a particular number of blocks in the past.
+
+```python
+def hasEnded(index: int, currentHeight: int, duration: int) -> bool:
+    if index < 0:
+        # for technical reasons, we always assume that proposals with negative indices have ended
+        return True
+    if proposalsStore[index] does not exist:
+        return False
+    return (currentHeight - proposalsStore[index].creationHeight) >= duration
+```
+
+#### addVotes
+
+The function adds a given number of votes to the given proposal, depending on the vote decision. Note that the number of votes could be negative.
+
+```python
+def addVotes(index: int, votes: int, decision: int) -> None:
+    if decision == DECISION_YES:
+        votesYes = votes + proposalsStore[index].votesYes
+        checkNonNegative(votesYes)
+        proposalsStore[index].votesYes = votesYes
+    elif decision == DECISION_NO:
+        votesNo = votes + proposalsStore[index].votesNo
+        checkNonNegative(votesNo)
+        proposalsStore[index].votesNo = votesNo
+    elif decision == DECISION_PASS:
+        votesPass = votes + proposalsStore[index].votesPass
+        checkNonNegative(votesPass)
+        proposalsStore[index].votesPass = votesPass
+    else:
+        raise Exception("Decision does not exist")
+```
+
+#### checkNonNegative
+
+This helper function checks if the given number is non negative and throws an exception otherwise.
+
+```python
+def checkNonNegative(number: int) -> None:
+    if number < 0:
+        raise Exception("Given number must be non-negative")
+```
+
+#### getVoteOutcome
+
+For a given number of Yes, No and Pass votes, the function checks whether the proposal passes or fails. The function applies the majority with turnout bias voting scheme (see [Rationale](#turnout-bias)). The function [getTotalSupply][getTotalSupply] is defined in the Token module.
+
+```python
+def getVoteOutcome(amountYes: int, amountNo: int, amountPass: int) -> int:
+    electorate = Token.getTotalSupply(TOKEN_ID_DEX_NATIVE)
+    turnout = amountYes + amountNo + amountPass
+    if amountYes * amountYes * turnout > amountNo * amountNo * electorate:
+        return PROPOSAL_STATUS_FINISHED_ACCEPTED
+    else:
+        return PROPOSAL_STATUS_FINISHED_FAILED
+```
+
+### Endpoints for Off-Chain Services
+
+This section specifies the non-trivial or recommended endpoints of the module and does not include all endpoints.
+
+#### getProposal
+
+The function returns the proposal object with a given index.
+
+```python
+def getProposal(index: int) -> Proposal:
+    if proposalsStore[index] does not exist:
+        raise Exception("Proposal with the given index does not exist")
+    return proposalsStore[index]
+```
+
+#### getUserVotes
+
+The function returns the vote information submitted by a particular user.
+
+```python
+def getUserVotes(voterAddress: Address) -> list[object]:
+    if votesStore[voterAddress] does not exist:
+        return []
+    return votesStore[voterAddress]
+```
+
+#### getIndexStore
+
+The function returns the index store information.
+
+```python
+def getIndexStore() -> object:
+    return indexStore
+```
+
+### Block Processing
+
+#### Before Transactions Execution
+
+The following logic checks whether the vote or quorum period of the active proposals has elapsed. The function [getTotalSupply][getTotalSupply] is defined in the Token module, [updateIncentivizedPools][updateIncentivizedPools] in the DEX module.
+
+```python
+def beforeTransactionsExecute(b: Block) -> None:
+    height = b.header.height
+    # check quorum if the quorum duration has elapsed
+    while hasEnded(indexStore.nextQuorumCheckIndex, height, QUORUM_DURATION):
+        index = indexStore.nextQuorumCheckIndex
+        proposal = proposalsStore[index]
+        turnout = proposal.votesYes + proposal.votesNo + proposal.votesPass
+        # check quorum without division to avoid float arithmetic
+        if turnout * 1000000 < QUORUM_PERCENTAGE * Token.getTotalSupply(TOKEN_ID_DEX_NATIVE):
+            # quorum is failed
+            proposalsStore[index].status = PROPOSAL_STATUS_FAILED_QUORUM
+
+        emitEvent(
+            module = MODULE_NAME_DEX_GOVERNANCE,
+            name = EVENT_NAME_PROPOSAL_QUORUM_CHECKED,
+            data = {
+                "index": index,
+                "status": proposalsStore[index].status
+            },
+            topics = [index.to_bytes(4, byteorder='big')]
+        )
+        indexStore.nextQuorumCheckIndex += 1
+
+    # check proposal outcome if vote duration has elapsed
+    while hasEnded(indexStore.nextOutcomeCheckIndex, height, VOTE_DURATION):
+        index = indexStore.nextOutcomeCheckIndex
+        proposal = proposalsStore[index]
+        if proposal.status == PROPOSAL_STATUS_ACTIVE:
+            # conclude the vote
+            outcome = getVoteOutcome(proposal.votesYes, proposal.votesNo, proposal.votesPass)
+            proposalsStore[index].status = outcome
+            if proposal.type == PROPOSAL_TYPE_INCENTIVIZATION and outcome == PROPOSAL_STATUS_FINISHED_ACCEPTED:
+                DEX.updateIncentivizedPools(proposal.content.poolID, proposal.content.multiplier, height)
+
+            emitEvent(
+                module = MODULE_NAME_DEX_GOVERNANCE,
+                name = EVENT_NAME_PROPOSAL_OUTCOME_CHECKED,
+                data = {
+                    "index": index,
+                    "status": outcome
+                },
+                topics = [index.to_bytes(4, byteorder='big')]
+            )
+        indexStore.nextOutcomeCheckIndex += 1
+```
+
+### Genesis block processing
+
+#### Genesis assets schema
+
+```java
+genesisDEXGovernanceSchema = {
+    "type": "object",
+    "required": [
+        "proposalsStore",
+        "votesStore"
+    ],
+    "properties": {
+        "proposalsStore": {
+            "type": "array",
+            "fieldNumber": 1,
+            "items": {
+            ...proposalSchema
+            }
+        },
+        "votesStore": {
+            "type": "array",
+            "fieldNumber": 2,
+            "items": {
+                "type": "object",
+                "required": [
+                    "address",
+                    "votes"
+                ],
+                "properties": {
+                    "address": {
+                        "dataType": "bytes",
+                        "length": LENGTH_ADDRESS,
+                        "fieldNumber": 1
+                    },
+                    "votes": {
+                        "fieldNumber": 2,
+                        ...votesSchema
+                    }
+                }
+            }
+        }
+    }
+}
+```
+
+#### Genesis state initialization
+
+The genesis state is initialized as follows:
+
+```python
+def initGenesisState(b: GenesisBlock) -> None:
+    # genesis block verification is defined below
+    verifyGenesisBlock(b)
+
+    genesisData = DEX Governance genesis data decoded with genesisDEXGovernanceSchema
+    height = b.header.height
+    # initialize proposals substore and compute values for index substore
+    for i, proposal in enumerate(proposalsStore):
+        proposalsStore[i] = encode(proposalSchema, {
+            "creationHeight": proposal.creationHeight,
+            "votesYes": proposal.votesYes,
+            "votesNo": proposal.votesNo,
+            "votesPass": proposal.votesPass,
+            "type": proposal.type,
+            "content": proposal.content,
+            "status": proposal.status
+        })
+
+    # initialize votes substore
+    for entry in votesStore:
+        votesStore[votes.address] = encode(votesSchema, {"voteInfos": entry.votes})
+
+    # initialize index substore
+    nextOutcomeCheckIndex = 0
+    nextQuorumCheckIndex = 0
+    newestIndex = length(proposalsStore) - 1
+    for i in range(length(proposalsStore)):
+        # proposals substore is already initialized
+        if not hasEnded(i, height, VOTE_DURATION):
+            nextOutcomeCheckIndex = i
+            break
+
+    for i in range(length(proposalsStore)):        
+        if not hasEnded(i, height, QUORUM_DURATION):
+            nextQuorumCheckIndex = i
+            break
+    indexStore = encode(indexSchema, { "newestIndex": newestIndex,
+        "nextOutcomeCheckIndex": nextOutcomeCheckIndex,
+        "nextQuorumCheckIndex": nextQuorumCheckIndex
+    })
+
+def verifyGenesisBlock(b: GenesisBlock) -> None:
+    genesisData = DEX Governance genesis data decoded with genesisDEXGovernanceSchema
+    proposalsStore = genesisData.proposalsStore
+    votesStore = genesisData.votesStore
+    height = b.header.height
+
+    # creation heights can not decrease in the array
+    previousCreationHeight = 0
+    for proposal in proposalsStore:
+        if proposal.creationHeight < previousCreationHeight:
+            raise Exception("Proposals must be indexed in the creation order")
+        previousCreationHeight = proposal.creationHeight
+
+    # checks for proposalsStore
+    for proposal in proposalsStore:
+        creationHeight = proposal.creationHeight
+        if creationHeight >= height:
+            raise Exception("Proposal can not be created in the future")
+        if proposal.type > 1:
+            raise Exception("Invalid proposal type")
+        if proposal.type == PROPOSAL_TYPE_INCENTIVIZATION and length(proposal.content.poolID) != NUM_BYTES_POOL_ID:
+            raise Exception("Incentivization proposal must contain a valid pool ID")
+        if proposal.type == PROPOSAL_TYPE_UNIVERSAL:
+            if length(proposal.content.text) == 0:
+                raise Exception("Proposal text can not be empty for universal proposal")
+            if length(proposal.content.poolID) != 0 or proposal.content.multiplier != 0:
+                raise Exception("For universal proposals, pool ID must be empty and multiplier must be set to 0")
+
+        if proposal.status > 3:
+            raise Exception("Invalid proposal status")
+
+    # checks for votesStore
+    if not all votes.address are unique for votes in votesStore:
+        raise Exception("All addresses in votes store must be unique")
+    for entry in votesStore:
+        for i, voteInfo in enumerate(entry.votes.voteInfos):
+            if voteInfo.proposalIndex >= length(proposalsStore):
+                raise Exception("Vote info references incorrect proposal index")    
+            if voteInfo.decision > 2:
+                raise Exception("Incorrect vote decision")
+
+    # check vote calculation for the live proposals
+    firstLive = max(0, length(proposalsStore) - MAX_NUMBER_LIVE_PROPOSALS)
+    votesYes = {}
+    votesNo = {}
+    votesPass = {}
+    rangeLiveProposals = range(firstLive, length(proposalsStore))
+    for index in rangeLiveProposals:
+        votesYes[index] = 0
+        votesNo[index] = 0
+        votesPass[index] = 0
+    for votesEntry in votesStore:
+        for voteInfo in votesEntry.votes:
+            if voteInfo.proposalIndex in rangeLiveProposals:
+                index = voteInfo.proposalIndex
+                decision = voteInfo.decision
+                amount = voteInfo.amount
+                if decision == DECISION_YES:
+                    votesYes[index] += amount
+                elif decision == DECISION_NO:
+                    votesNo[index] += amount
+                elif decision == DECISION_PASS:
+                    votesPass[index] += amount
+    for index in rangeLiveProposals:
+        if proposalsStore[index].votesYes != votesYes[index] or
+            proposalsStore[index].votesNo != votesNo[index] or
+            proposalsStore[index].votesPass != votesPass[index]:
+            raise Exception("Incorrect vote data about the live proposals")
+```
+
+[dexIncentivesModule]: https://github.com/LiskHQ/lips-staging/blob/main/proposals/lip_introduce_DEX_Rewards_module.md
+[poolExists]: https://github.com/LiskHQ/lips-staging/blob/main/proposals/lip-introduce_DEX_Module.md#poolexists
+[updateIncentivizedPools]: https://github.com/LiskHQ/lips-staging/blob/main/proposals/lip-introduce_DEX_Module.md#updateincentivizedpools
+[getLockedVotedAmount]: https://github.com/LiskHQ/lips-staging/blob/main/proposals/lip-0057.md#getlockedvotedamount
+[posModule]: https://github.com/LiskHQ/lips-staging/blob/main/proposals/lip-0057.md
+[payFee]: https://github.com/LiskHQ/lips/blob/main/proposals/lip-0048.md#payfee
+[getAvailableBalance]: https://github.com/LiskHQ/lips/blob/main/proposals/lip-0051.md#getavailablebalance
+[getTotalSupply]: https://github.com/LiskHQ/lips/blob/main/proposals/lip-0051.md#gettotalsupply
