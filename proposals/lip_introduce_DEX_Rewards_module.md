@@ -77,7 +77,7 @@ We define the following constants:
 |`ADDRESS_VALIDATOR_INCENTIVES`|`bytes`|`SHA256(b"validatorIncentivesAccount")[:NUM_BYTES_ADDRESS]`|The address of the validator incentives account, as  defined in the [DEX module][dexModule].|
 |`TOKEN_ID_DEX_NATIVE`      |   `bytes`           |           TBA         |Token ID of the native token of DEX sidechain.         |
 |   `TOKEN_ID_LSK`          |   `bytes`           |`0x00 00 00 00 00 00 00 00`|       Token ID of the LSK token.                  |
-|   `EPOCH_LENGTH_INCENTIVE_REDUCTION`          |   `uint32`           | 3000000 |           The duration of the epoch after which liquidity incentives decrease.   |
+|   `LENGTH_EPOCH_REWARDS_INCENTIVES`          |   `uint32`           | 3153600 |           The duration of the epoch after which liquidity incentives decrease. The value is equal to `6 * 60 * 24 * 365`, i.e., the number of block slots in 365 days given 10 second block slots.   |
 |`EVENT_NAME_VALIDATOR_INCENTIVES_PAYOUT`|`string`|   "validatorIncentivesPayout"  |Name of the validator trade incentives payout event.|
 
 ### State Store
@@ -127,13 +127,13 @@ The function returns the amount of liquidity incentives to be minted for a block
 
 ```python
 def getLiquidityIncentivesAtHeight(height: int) -> int:
-    if height < EPOCH_LENGTH_INCENTIVE_REDUCTION:
+    if height < LENGTH_EPOCH_REWARDS_INCENTIVES:
         return 400000000
-    if height < 2*EPOCH_LENGTH_INCENTIVE_REDUCTION:
+    if height < 2*LENGTH_EPOCH_REWARDS_INCENTIVES:
         return 350000000
-    if height < 3*EPOCH_LENGTH_INCENTIVE_REDUCTION:
+    if height < 3*LENGTH_EPOCH_REWARDS_INCENTIVES:
         return 300000000
-    if height < 4*EPOCH_LENGTH_INCENTIVE_REDUCTION:
+    if height < 4*LENGTH_EPOCH_REWARDS_INCENTIVES:
         return 250000000
     return 200000000
 ```
@@ -201,10 +201,10 @@ This function returns the total amount of block incentives for liquidity provide
 def getLPIncentivesInRange(startHeight: int, endHeight: int) -> int:
     if endHeight < startHeight:
         raise Exception()
-    EPOCHS = [EPOCH_LENGTH_INCENTIVE_REDUCTION,
-        2*EPOCH_LENGTH_INCENTIVE_REDUCTION,
-        3*EPOCH_LENGTH_INCENTIVE_REDUCTION,
-        4*EPOCH_LENGTH_INCENTIVE_REDUCTION]
+    EPOCHS = [LENGTH_EPOCH_REWARDS_INCENTIVES,
+        2*LENGTH_EPOCH_REWARDS_INCENTIVES,
+        3*LENGTH_EPOCH_REWARDS_INCENTIVES,
+        4*LENGTH_EPOCH_REWARDS_INCENTIVES]
     height = startHeight + 1    # incentives for the start block are excluded
     incentives = 0
     for changeHeight in EPOCHS:
