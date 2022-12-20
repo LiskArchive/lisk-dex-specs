@@ -59,11 +59,6 @@ This is expected to increase the value of the DEX native token and therefore ove
 
 These modules contain the unique blockchain-application-specific logic for the decentralized exchange and an associated decentralized governance mechanism. The rationale for the design decisions regarding this part of the protocol is provided in the respective specification documents.
 
-
-Open Points:
-
-- Will the Lisk DEX v1 blockchain be connected to Lisk Testnet or be an isolated blockchain? For an isolated blockchain, we would need different tokens for fees and should also create more native tokens for testing purposes.
-
 ## Specification
 
 ### Notation and Constants
@@ -124,8 +119,8 @@ In general, the Lisk DEX chain uses the same value for all module-specific confi
 
 | Module             | Name                        | Value          | Description                       |
 |--------------------|-----------------------------|----------------|-----------------------------------|
-| [PoS][lip-0057]    | `LOCKING_PERIOD_STAKES`     | 260,000        | The locking period for staking.   |
-| [PoS][lip-0057]    | `PUNISHMENT_WINDOW_STAKES`  | 780,000        | The locking period for staking in case of a punishment. |
+| [PoS][lip-0057]    | `LOCKING_PERIOD_STAKING`     | 260,000        | The locking period for staking.   |
+| [PoS][lip-0057]    | `PUNISHMENT_WINDOW_STAKING`  | 780,000        | The locking period for staking in case of a punishment. |
 | [PoS][lip-0057]    | `TOKEN_ID_POS`              | TOKEN_ID_DEX   | The token ID of the token used for staking.  |
 | [Dynamic Block Rewards][lip-0071] | `TOKEN_ID_DYNAMIC_BLOCK_REWARD` | TOKEN_ID_DEX | The token ID of the token used for block rewards.  |
 
@@ -307,7 +302,7 @@ tokenDistributionSchema = {
             "fieldNumber": 1,
             "items": {
                 "type": "object",
-                "required": ["address", "amount"],
+                "required": ["address", "balance"],
                 "properties": {
                     "address" : {
                         "dataType": "bytes",
