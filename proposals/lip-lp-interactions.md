@@ -1215,7 +1215,7 @@ This function computes the share of fees and liquidity provider incentives earne
 Both fees and incentives are transferred to the position owner.
 
 ```python
-def collectFeesAndIncentives(positionID: PositionID, currentHeight: int) -> None:
+def collectFeesAndIncentives(positionID: PositionID, currentHeight: uint32) -> None:
     poolID = getPoolIDFromPositionID(positionID)
     positionInfo = position(positionID)
     ownerAddress = getOwnerAddressOfPosition(positionID)
@@ -1376,7 +1376,7 @@ This internal function is used to create a new liquidity pool with the provided 
 ##### Execution
 
 ```python
-def createPool(tokenID0: TokenID, tokenID1: TokenID, feeTier: uint32, initialSqrtPrice: Q96, currentHeight: int) -> uint32:
+def createPool(tokenID0: TokenID, tokenID1: TokenID, feeTier: uint32, initialSqrtPrice: Q96, currentHeight: uint32) -> uint32:
     # check validity of input parameters
     if there is no entry s in dexGlobalData.poolCreationSettings with s.feeTier == feeTier:
         return POOL_CREATION_FAILED_INVALID_FEE_TIER
@@ -1644,7 +1644,7 @@ Analogously, `amount1` is the amount of `token1` added or removed from the posit
 ##### Execution
 
 ```python
-def updatePosition(positionID: PositionID, liquidityDelta: int64, currentHeight: int) -> Tuple[uint64, uint64]:
+def updatePosition(positionID: PositionID, liquidityDelta: int64, currentHeight: uint32) -> Tuple[uint64, uint64]:
     # check validity of input parameters
     positionInfo = positions[positionID]
     if -liquidityDelta > positionInfo.liquidity:
