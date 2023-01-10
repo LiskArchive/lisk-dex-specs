@@ -273,10 +273,10 @@ def execute(trs: Transaction) -> None:
         raiseSwapException(SWAP_FAILED_INVALID_ROUTE, tokenIdIn,
                             tokenIdOut, senderAddress)
     fees = []
+    numCrossedTicks = 0
 
     # swap along all the pools in swapRoute
     for poolId in swapRoute:
-
         currentTokenIn = tokens[-1]
         if getToken0Id(poolId) == currentTokenIn.id:
             zeroToOne = True
@@ -288,7 +288,7 @@ def execute(trs: Transaction) -> None:
         # if zeroToOne then price decreases after the swap, otherwise it increases
         sqrtLimitPrice = zeroToOne ? MIN_SQRT_RATIO : MAX_SQRT_RATIO
         try:
-            (amountIn, amountOut, feesIn, feesOut) = swap(poolId, zeroToOne, sqrtLimitPrice, currentTokenIn.amount, False, currentHeight)
+            (amountIn, amountOut, feesIn, feesOut, numCrossedTicks) = swap(poolId, zeroToOne, sqrtLimitPrice, currentTokenIn.amount, False, numCrossedTicks, currentHeight)
         except ExceptionSwapCrossedTooManyTicks:    # specific exception class for crossing too many ticks
             # crossed too many ticks
             raiseSwapException(SWAP_FAILED_TOO_MANY_TICKS, tokenIdIn,
@@ -303,9 +303,9 @@ def execute(trs: Transaction) -> None:
                             tokenIdOut, senderAddress)
 
     else:
-        priceAfter = computeCurrentPrice(tokenIdIn, tokenIdOut, swapRoute)
         # make the corresponding state updates
         # transfer and lock all the tokens involved in the multihop swap  
+        priceAfter = computeCurrentPrice(tokenIdIn, tokenIdOut, swapRoute)
         transferToPool(senderAddress, swapRoute[0], tokenIdIn, trs.params.amountTokenIn)
         transferFeesFromPool(fees[0].in, tokenIdIn, swapRoute[0])
         for i in range(1, length(swapRoute)):
@@ -420,22 +420,23 @@ Processing a transaction trs with module name `MODULE_NAME_DEX` and command name
 
 ```python
 def execute(trs: Transaction) -> None:
-    inverseSwapRoute = reverse trs.params.swapRoute
+    senderAddress = SHA256(trs.senderPublicKey)[:NUM_BYTES_ADDRESS]
     tokenIdIn = trs.params.tokenIdIn
     tokenIdOut = trs.params.tokenIdOut
-    senderAddress = SHA256(trs.senderPublicKey)[:NUM_BYTES_ADDRESS]
+    tokens = [{id: tokenIdOut, amount: trs.params.amountTokenOut}]
+    inverseSwapRoute = reverse trs.params.swapRoute
     currentHeight = height of the block containing trs
     try:
         priceBefore = computeCurrentPrice(tokenIdIn, tokenIdOut, trs.params.swapRoute)
     except:
         raiseSwapException(SWAP_FAILED_INVALID_ROUTE, tokenIdIn,
                             tokenIdOut, senderAddress)
+    fees = []
+    numCrossedTicks = 0
 
     # swap along all the pools in inverseSwapRoute
-    tokens = {id: tokenIdOut, amount: trs.params.amountTokenOut}
     for poolId in inverseSwapRoute:
         currentTokenOut = tokens[-1]
-
         if getToken1Id(poolId) == currentTokenOut.id:
             zeroToOne = True
             IdIn = getToken0Id(poolId)
@@ -446,7 +447,7 @@ def execute(trs: Transaction) -> None:
         # if zeroToOne then price decreases after the swap, otherwise it increases
         sqrtLimitPrice = zeroToOne ? MIN_SQRT_RATIO : MAX_SQRT_RATIO
         try:
-            (amountIn, amountOut, feesIn, feesOut) = swap(poolId, zeroToOne, sqrtLimitPrice, currentTokenOut.amount, False, currentHeight)
+            (amountIn, amountOut, feesIn, feesOut, numCrossedTicks) = swap(poolId, zeroToOne, sqrtLimitPrice, currentTokenOut.amount, False, numCrossedTicks, currentHeight)
         except ExceptionSwapCrossedTooManyTicks:    # specific exception class for crossing too many ticks
             # crossed too many ticks
             raiseSwapException(SWAP_FAILED_TOO_MANY_TICKS, tokenIdIn,
@@ -606,7 +607,8 @@ def execute(trs: Transaction) -> None:
         zeroToOne = False
 
     try:
-        (amountIn, amountOut, feesIn, feesOut) = swap(poolId, zeroToOne, sqrtLimitPrice, amountTokenIn, True, currentHeight)
+        (amountIn, amountOut, feesIn, feesOut, numCrossedTicks) = swap(poolId, zeroToOne, sqrtLimitPrice, amountTokenIn, True, 0, currentHeight)
+        # the variable numCrossedTicks is not needed here and could be discarded
     except ExceptionSwapCrossedTooManyTicks:    # specific exception class for crossing too many ticks
         # crossed too many ticks
         raiseSwapException(SWAP_FAILED_TOO_MANY_TICKS, tokenIdIn,
@@ -649,7 +651,7 @@ In this section we specify the internal functions that are part of the processin
 
 #### swap
 
-This function computes a complete swap within a single pool (crossing as many price ticks as required as long as they are less than `MAX_NUMBER_CROSSED_TICKS`).
+This function computes a complete swap within a single pool. It crosses as many price ticks as required as long as the total number of crossed ticks is not more than `MAX_NUMBER_CROSSED_TICKS`.
 This function calls the `swapWithin` function (see below) to calculate the amounts and price update within a tick range.
 Unlike the [swap function][swapuniswap] of Uniswap v3, this function does not send the output amount to an address, this will be done outside this function by calling the corresponding token module exposed functions.
 
@@ -660,14 +662,16 @@ Unlike the [swap function][swapuniswap] of Uniswap v3, this function does not se
 - `sqrtLimitPrice`: A Q96 number with the price limit not to be crossed by the swap.
 - `amountSpecified`: The exact amount of tokens for the swap. It is the input amount if `exactInput == True` and is the output amount otherwise.
 - `exactInput`: A boolean indicating whether a swap is performed with exact input or with exact output.
+- `numCrossedTicks`: The total number of ticks crossed before swapping in the given pool.
 - `currentHeight`: An integer with the height of the block when the swap is performed, is needed for correct tick crossing.
 
 ##### Returns
 
-- `amountIn`: A `uint64` with the total amount of the input token to be swapped in, including all the fees.
-- `amountOut`: A `uint64` with the total amount of the ouput token to be swapped out.
-- `totalFeesIn`: A `uint64` with the amount of fees to pay in the swap input tokens.
-- `totalFeesOut`: A `uint64` with the amount of fees to pay in the swap output tokens.
+- `amountIn`: The total amount of the input token to be swapped in, including all the fees.
+- `amountOut`: The total amount of the output token to be swapped out.
+- `totalFeesIn`: The amount of fees to pay in the swap input tokens.
+- `totalFeesOut`: The amount of fees to pay in the swap output tokens.
+- `numCrossedTicks`: The total number of ticks crossed after swapping in the given pool.
 
 ##### Execution
 
@@ -677,8 +681,9 @@ def swap(poolId: PoolID,
     sqrtLimitPrice: Q96,
     amountSpecified: uint64,
     exactInput: bool,
-    currentHeight: int
-    ) -> tuple[uint64, uint64, uint64, uint64]:
+    numCrossedTicks: uint32,
+    currentHeight: uint32
+    ) -> tuple[uint64, uint64, uint64, uint64, uint32]:
 
     feeTier = getFeeTier(poolId)
     poolSqrtPriceQ96 = bytesToQ96(pools[poolId].sqrtPrice)
@@ -689,7 +694,6 @@ def swap(poolId: PoolID,
         (not zeroToOne and sqrtLimitPrice <= poolSqrtPriceQ96):
         return (0,0,0,0)
 
-    numCrossedTicks = 0
     amountRemaining = amountSpecified
     amountTotalIn = 0
     amountTotalOut = 0
@@ -699,7 +703,7 @@ def swap(poolId: PoolID,
     # loop like Figure 4 in uniswap v3 whitepaper until amount is exhausted, price limit is reached, or max number of ticks crossed
     # we use != for prices because otherwise we need to account for approaching limit price from above and from below
     while(amountRemaining != 0 and poolSqrtPriceQ96 != sqrtLimitPrice):
-        if numCrossedTicks >= MAX_NUMBER_CROSSED_TICKS:
+        if numCrossedTicks > MAX_NUMBER_CROSSED_TICKS:
             raise ExceptionSwapCrossedTooManyTicks() # specific exception class for crossing too many ticks
 
         currentTick = priceToTick(poolSqrtPriceQ96)
@@ -851,7 +855,7 @@ where the functions `getAmount0Delta`, `getAmount1Delta` and `computeNextPrice` 
 The function crosses a tick either from left to right or from right to left by updating all the necessary state store information.
 
 ```python
-def crossTick(tickId: TickID, leftToRight: bool, currentHeight: int) -> None:
+def crossTick(tickId: TickID, leftToRight: bool, currentHeight: uint32) -> None:
     poolId = tickId[:NUM_BYTES_POOL_ID]
     # update pool incentives at the current liquidity
     updatePoolIncentives(poolId, currentHeight)
@@ -879,7 +883,7 @@ def crossTick(tickId: TickID, leftToRight: bool, currentHeight: int) -> None:
 The function computes the correct amount of validator fees, transfers them from the given pool address to the validator incentives account, and locks the transferred tokens.
 
 ```python
-def transferFeesFromPool(amount: int, id: TokenID, pool: PoolID) -> None:
+def transferFeesFromPool(amount: uint64, id: TokenID, pool: PoolID) -> None:
     validatorFee = 0
     if id == TOKEN_ID_LSK:
         validatorFee = roundDown_96(muldiv_96(Q96(amount), Q96(VALIDATORS_LSK_INCENTIVE_PART), Q96(FEE_TIER_PARTITION)))
@@ -894,7 +898,7 @@ def transferFeesFromPool(amount: int, id: TokenID, pool: PoolID) -> None:
 The function raises an exception during a failed swap and it emits the necessary persistent event.
 
 ```python
-def raiseSwapException(reason: int, tokenIn: TokenID, tokenOut: TokenID, senderAddress: Address) -> None:
+def raiseSwapException(reason: uint32, tokenIn: TokenID, tokenOut: TokenID, senderAddress: Address) -> None:
     # should not happen
     emitPersistentEvent(
         module = MODULE_NAME_DEX,
@@ -1049,8 +1053,8 @@ def computeExceptionalRoute(tokenIn: TokenID, tokenOut: TokenID, poolsGraph: Poo
 Function `getOptimalSwapPool` finds a pool to swap given amount of tokens with the best value for user. If there is no direct pool then an exception is thrown. The function dry runs swap transactions and is thus computationally intense. The functions `dryRunSwapExactIn` and `dryRunSwapExactOut` are endpoints for off-chain services defined in the [Introduce DEX module LIP][dexmodulelip].
 
 ```python
-def getOptimalSwapPool(tokenIn: TokenID, tokenOut: TokenID, amount: int,
-                        exactIn: bool) -> tuple(PoolID, int):
+def getOptimalSwapPool(tokenIn: TokenID, tokenOut: TokenID, amount: uint64,
+                        exactIn: bool) -> tuple(PoolID, uint64):
     token0, token1 = tokenIn, tokenOut sorted lexicographically
     candidatePools = []
     for setting in dexGlobalData.poolCreationSettings:
@@ -1093,7 +1097,7 @@ Function `getRoute` implements the routing algorithm to find a swapping route be
 - `exactIn`: If `True` then the route is found for the exact input command, otherwise for the exact output command.
 
 ```python
-def getRoute(tokenIn: TokenID, tokenOut: TokenID, poolsGraph: PoolsGraph, amount: int,
+def getRoute(tokenIn: TokenID, tokenOut: TokenID, poolsGraph: PoolsGraph, amount: uint64,
                 exactIn: bool) -> list[TokenID]:
     bestRoute = []
     regularRoute = computeRegularRoute(tokenIn, tokenOut, poolsGraph)
