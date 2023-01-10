@@ -76,10 +76,7 @@ The "Pass" option shows that a user agrees with the importance of the proposal a
 All the "Pass" votes count towards the quorum.
 
 User vote decisions are registered on-chain, which allows to recast votes with a different decision and token amount.
-For the storage reasons, decisions for only a certain number of the live proposals could be recorded, which limits the total number of simultaneous proposals (see `MAX_NUMBER_LIVE_PROPOSALS` in the [table of constants](#notation-and-constants)).
-The proposal is considered to be live if its vote duration has not ended, independently of whether the quorum passed or failed.
-Proposals which are not live are called archived.
-The user voting information is not stored for archived proposals, only the proposal information is (for example, creation height, total votes, final conclusion).
+For the storage reasons, decisions for only a certain number of proposals are recorded, which limits the total number of simultaneous proposals (see `MAX_NUM_RECORDED_VOTES` in the [table of constants](#notation-and-constants)). Note that the proposal information itself (for example, creation height, total votes, final conclusion) is stored for all proposals.
 
 ### Turnout bias
 
@@ -118,7 +115,6 @@ This LIP uses the following terms:
 - A **pool incentivization proposal** is a proposal type in the DEX Governance module that requests modifying the list of incentivized liquidity pools. Once accepted, this proposal has immediate on-chain consequences.
 - A **universal proposal** is a proposal type in the DEX Governance module that can request arbitrary DEX-related actions, for example, changes in protocol, UI or even project strategy. Once accepted, this proposal is acted upon off-chain.
 - An **active proposal** is a proposal in the DEX Governance module that users can vote on.
-- A **live proposal** is a proposal in the DEX Governance module for which all voter decisions are still stored. The number of live proposals is limited.
 
 ### Types
 
@@ -140,7 +136,7 @@ We define the following constants:
 |`FEE_PROPOSAL_CREATION`|`uint64`|5000 * 10^8|Amount of fee to be paid for proposal creation in DEX native tokens.|
 |`MINIMAL_BALANCE_PROPOSE`|`uint64`|100000 * 10^8|Minimal amount of DEX native tokens an account should have to create a proposal (including PoS locked tokens).|
 |`QUORUM_PERCENTAGE`|`uint32`|10000|Relative amount of votes required for a proposal to pass the quorum, in parts-per-million of the amount of the total supply.|
-|`MAX_NUMBER_LIVE_PROPOSALS`|`uint32`|100|Maximal number of proposals allowed to exist simultaneously.|
+|`MAX_NUM_RECORDED_VOTES`|`uint32`|100|Maximal number of proposals allowed to exist simultaneously.|
 |`MAX_LENGTH_PROPOSAL_TEXT`|`uint32`|10*1024|The maximal allowed length for proposal text, in bytes.|
 |`MAX_LENGTH_METADATA_TITLE`|`uint32`|124|The maximal allowed length for data in the `title` property in proposal metadata, in bytes. |
 |`MAX_LENGTH_METADATA_AUTHOR`|`uint32`|200|The maximal allowed length for data in the `author` property in proposal metadata, in bytes. |
@@ -160,7 +156,7 @@ We define the following constants:
 |`EVENT_NAME_PROPOSAL_QUORUM_CHECKED`|`string`|"proposalQuorumChecked"| Event name of the Proposal Quorum Checked event.|
 |`EVENT_NAME_PROPOSAL_OUTCOME_CHECKED`|`string`|"proposalOutcomeChecked"| Event name of the Proposal Outcome Checked event.|
 |`EVENT_NAME_PROPOSAL_VOTED`|`string`|"proposalVoted"| Event name of the Proposal Voted event.|
-|`CREATION_FAILED_TOO_MANY_LIVE`|`uint32`| 0 | Event error code for failed proposal creation when the limit of live proposals is reached. |
+|`CREATION_FAILED_LIMIT_RECORDED_VOTES`|`uint32`| 0 | Event error code for failed proposal creation when the limit of proposals with recorded votes is reached. |
 |`CREATION_FAILED_NO_POOL`|`uint32`| 1 | Event error code for failed incentivization proposal creation when the incentivized pool does not exist. |
 |`PROPOSAL_TYPE_UNIVERSAL`|`uint32`|0|Code for universal type proposals.|
 |`PROPOSAL_TYPE_INCENTIVIZATION`|`uint32`|1|Code for incentivization type proposals.|
@@ -341,7 +337,7 @@ votesSchema = {
 
 ##### Properties
 
-- `voteInfos`: An array containing information about the votes cast from the address. Logically the array is structured as a queue (FIFO) and its length is limited by `MAX_NUMBER_LIVE_PROPOSALS`. An element of `voteInfos` includes:
+- `voteInfos`: An array containing information about the votes cast from the address. Logically the array is structured as a queue (FIFO) and its length is limited by `MAX_NUM_RECORDED_VOTES`. An element of `voteInfos` includes:
     - `proposalIndex`: The index of the proposal for which the vote was cast.
     - `decision`: The decision cast by the voter.
     - `amount`: The staked amount of tokens when casting the vote.
@@ -448,9 +444,9 @@ The function [payFee][payFee] is defined in the Fee module.
 ```python
 def execute(trs: Transaction) -> None:
     # non-trivial verificaiton checks
-    if not hasEnded(indexStore.newestIndex - MAX_NUMBER_LIVE_PROPOSALS + 1, currentHeight, VOTE_DURATION):
-        emitProposalCreationFailedEvent(CREATION_FAILED_TOO_MANY_LIVE)
-        raise Exception("Limit number of live proposals was reached")
+    if not hasEnded(indexStore.newestIndex - MAX_NUM_RECORDED_VOTES + 1, currentHeight, VOTE_DURATION):
+        emitProposalCreationFailedEvent(CREATION_FAILED_LIMIT_RECORDED_VOTES)
+        raise Exception("Limit of proposals with recoded votes is reached")
     if trs.params.type == PROPOSAL_TYPE_INCENTIVIZATION and not DEX.poolExists(content.poolID):
         emitProposalCreationFailedEvent(CREATION_FAILED_NO_POOL)
         raise Exception("Incentivized pool does not exist")
@@ -482,7 +478,7 @@ def execute(trs: Transaction) -> None:
         topics = [index.to_bytes(4, byteorder='big')]
     )
 
-def emitProposalCreationFailedEvent(reason: int) -> None:
+def emitProposalCreationFailedEvent(reason: uint32) -> None:
     emitPersistentEvent(
         module = MODULE_NAME_DEX_GOVERNANCE,
         name = EVENT_NAME_PROPOSAL_CREATION_FAILED,
@@ -551,7 +547,7 @@ def execute(trs: Transaction) -> None:
         # deduce if the previous saved votes are for the current proposal
         addVotes(index, -voteInfo.amount, voteInfo.decision)
         replace voteInfo with newVoteInfo in votesStore[senderAddress]
-    elif length(votesStore[address]) < MAX_NUMBER_LIVE_PROPOSALS:
+    elif length(votesStore[address]) < MAX_NUM_RECORDED_VOTES:
         # append info about the vote to the vote infos queue
         votesStore[senderAddress].append(newVoteInfo)
     else:
@@ -630,7 +626,7 @@ proposalCreationFailedEventDataSchema = {
 }
 ```
 
-Allowed values for `reason` are: `CREATION_FAILED_TOO_MANY_LIVE`, `CREATION_FAILED_NO_POOL`.
+Allowed values for `reason` are: `CREATION_FAILED_LIMIT_RECORDED_VOTES`, `CREATION_FAILED_NO_POOL`.
 
 #### Proposal Quorum Checked
 
@@ -746,7 +742,7 @@ proposalVotedEventSchema = {
 The function checks whether a given proposal was created more than a particular number of blocks in the past.
 
 ```python
-def hasEnded(index: int, currentHeight: int, duration: int) -> bool:
+def hasEnded(index: uint32, currentHeight: uint32, duration: uint32) -> bool:
     if index < 0:
         # for technical reasons, we always assume that proposals with negative indices have ended
         return True
@@ -760,7 +756,7 @@ def hasEnded(index: int, currentHeight: int, duration: int) -> bool:
 The function adds a given number of votes to the given proposal, depending on the vote decision. Note that the number of votes could be negative.
 
 ```python
-def addVotes(index: int, votes: int, decision: int) -> None:
+def addVotes(index: uint32, votes: int64, decision: uint32) -> None:
     if decision == DECISION_YES:
         votesYes = votes + proposalsStore[index].votesYes
         checkNonNegative(votesYes)
@@ -782,7 +778,7 @@ def addVotes(index: int, votes: int, decision: int) -> None:
 This helper function checks if the given number is non negative and throws an exception otherwise.
 
 ```python
-def checkNonNegative(number: int) -> None:
+def checkNonNegative(number: int64) -> None:
     if number < 0:
         raise Exception("Given number must be non-negative")
 ```
@@ -792,7 +788,7 @@ def checkNonNegative(number: int) -> None:
 For a given number of Yes, No and Pass votes, the function checks whether the proposal passes or fails. The function applies the majority with turnout bias voting scheme (see [Rationale](#turnout-bias)). The function [getTotalSupply][getTotalSupply] is defined in the Token module.
 
 ```python
-def getVoteOutcome(amountYes: int, amountNo: int, amountPass: int) -> int:
+def getVoteOutcome(amountYes: uint64, amountNo: uint64, amountPass: uint64) -> uint32:
     electorate = Token.getTotalSupply(TOKEN_ID_DEX_NATIVE)
     turnout = amountYes + amountNo + amountPass
     if amountYes * amountYes * turnout > amountNo * amountNo * electorate:
@@ -810,7 +806,7 @@ This section specifies the non-trivial or recommended endpoints of the module an
 The function returns the proposal object with a given index.
 
 ```python
-def getProposal(index: int) -> Proposal:
+def getProposal(index: uint32) -> Proposal:
     if proposalsStore[index] does not exist:
         raise Exception("Proposal with the given index does not exist")
     return proposalsStore[index]
@@ -1021,19 +1017,19 @@ def verifyGenesisBlock(b: GenesisBlock) -> None:
             if voteInfo.decision > 2:
                 raise Exception("Incorrect vote decision")
 
-    # check vote calculation for the live proposals
-    firstLive = max(0, length(proposalsStore) - MAX_NUMBER_LIVE_PROPOSALS)
+    # check vote calculation for the proposals with recorded votes
+    firstWithRecordedVotes = max(0, length(proposalsStore) - MAX_NUM_RECORDED_VOTES)
     votesYes = {}
     votesNo = {}
     votesPass = {}
-    rangeLiveProposals = range(firstLive, length(proposalsStore))
-    for index in rangeLiveProposals:
+    rangeWithRecordedVotes = range(firstWithRecordedVotes, length(proposalsStore))
+    for index in rangeWithRecordedVotes:
         votesYes[index] = 0
         votesNo[index] = 0
         votesPass[index] = 0
     for votesEntry in votesStore:
         for voteInfo in votesEntry.votes:
-            if voteInfo.proposalIndex in rangeLiveProposals:
+            if voteInfo.proposalIndex in rangeWithRecordedVotes:
                 index = voteInfo.proposalIndex
                 decision = voteInfo.decision
                 amount = voteInfo.amount
@@ -1043,11 +1039,11 @@ def verifyGenesisBlock(b: GenesisBlock) -> None:
                     votesNo[index] += amount
                 elif decision == DECISION_PASS:
                     votesPass[index] += amount
-    for index in rangeLiveProposals:
+    for index in rangeWithRecordedVotes:
         if proposalsStore[index].votesYes != votesYes[index] or
             proposalsStore[index].votesNo != votesNo[index] or
             proposalsStore[index].votesPass != votesPass[index]:
-            raise Exception("Incorrect vote data about the live proposals")
+            raise Exception("Incorrect vote data about the proposals with recorded votes")
 ```
 
 [dexIncentivesModule]: https://github.com/LiskHQ/lips-staging/blob/main/proposals/lip_introduce_DEX_Rewards_module.md
