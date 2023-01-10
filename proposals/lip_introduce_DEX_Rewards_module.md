@@ -72,13 +72,15 @@ We define the following constants:
 |---------------------------|-------------------|-----------------------|-------------------------------------------------------|
 |`MODULE_NAME_DEX_INCENTIVES`  |     `string`        |     "dexIncentives"      |Name of the DEX Incentives module.                   |
 |`MODULE_NAME_DEX`          |     `string`        |           "dex"       |Name of the DEX module, as  defined in the [DEX module][dexModule].|
+|`EVENT_NAME_VALIDATOR_INCENTIVES_PAYOUT`|`string`|   "validatorIncentivesPayout"  |Name of the validator trade incentives payout event.|
 |`NUM_BYTES_ADDRESS`        |   `uint32`        |           20          |The number of bytes of an address.|
-|`ADDRESS_LIQUIDITY_PROVIDER_INCENTIVES` |`bytes`|`SHA256(b"liquidityProviderIncentivesAccount")[:NUM_BYTES_ADDRESS]`|  The address of the liquidity provider incentives account, as  defined in the [DEX module][dexModule].|
-|`ADDRESS_VALIDATOR_INCENTIVES`|`bytes`|`SHA256(b"validatorIncentivesAccount")[:NUM_BYTES_ADDRESS]`|The address of the validator incentives account, as  defined in the [DEX module][dexModule].|
 |`TOKEN_ID_DEX_NATIVE`      |   `bytes`           |           TBA         |Token ID of the native token of DEX sidechain.         |
 |   `TOKEN_ID_LSK`          |   `bytes`           |`0x00 00 00 00 00 00 00 00`|       Token ID of the LSK token.                  |
+|**Configurable constants**   |                   |   **DEX Sidechain value** |                                                   |
+|`ADDRESS_LIQUIDITY_PROVIDER_INCENTIVES` |`bytes`|`SHA256(b"liquidityProviderIncentivesAccount")[:NUM_BYTES_ADDRESS]`|  The address of the liquidity provider incentives account, as  defined in the [DEX module][dexModule].|
+|`ADDRESS_VALIDATOR_INCENTIVES`|`bytes`|`SHA256(b"validatorIncentivesAccount")[:NUM_BYTES_ADDRESS]`|The address of the validator incentives account, as  defined in the [DEX module][dexModule].|
 |   `LENGTH_EPOCH_REWARDS_INCENTIVES`          |   `uint32`           | 3153600 |           The duration of the epoch after which liquidity incentives decrease. The value is equal to `6 * 60 * 24 * 365`, i.e., the number of block slots in 365 days given 10 second block slots.   |
-|`EVENT_NAME_VALIDATOR_INCENTIVES_PAYOUT`|`string`|   "validatorIncentivesPayout"  |Name of the validator trade incentives payout event.|
+|   `BOOTSTRAP_PERIOD_OFFSET`   | `uint32`  | 259975 | The height of the first block after the bootstrap period. It is equal to `2574 * 101 + 1`, where 2574 is the number of rounds in the bootstrap period and 101 is the number of bootstrap validators. |
 
 ### State Store
 
@@ -126,14 +128,17 @@ The function returns the amount of liquidity incentives to be minted for a block
 ##### Execution
 
 ```python
-def getLiquidityIncentivesAtHeight(height: int) -> int:
-    if height < LENGTH_EPOCH_REWARDS_INCENTIVES:
+def getLiquidityIncentivesAtHeight(height: uint32) -> uint64:
+    if height < BOOTSTRAP_PERIOD_OFFSET:
+        # no incentives during the bootstrap period
+        return 0
+    if height < BOOTSTRAP_PERIOD_OFFSET + LENGTH_EPOCH_REWARDS_INCENTIVES:
         return 400000000
-    if height < 2*LENGTH_EPOCH_REWARDS_INCENTIVES:
+    if height < BOOTSTRAP_PERIOD_OFFSET + 2*LENGTH_EPOCH_REWARDS_INCENTIVES:
         return 350000000
-    if height < 3*LENGTH_EPOCH_REWARDS_INCENTIVES:
+    if height < BOOTSTRAP_PERIOD_OFFSET + 3*LENGTH_EPOCH_REWARDS_INCENTIVES:
         return 300000000
-    if height < 4*LENGTH_EPOCH_REWARDS_INCENTIVES:
+    if height < BOOTSTRAP_PERIOD_OFFSET + 4*LENGTH_EPOCH_REWARDS_INCENTIVES:
         return 250000000
     return 200000000
 ```
@@ -176,7 +181,7 @@ def transferAllValidatorLSKIncentives(validators: list[Validator]) -> None:
 This function transfers a given amount of incentives to a given validator. It emits a corresponding event.
 
 ```python
-def transferValidatorIncentives(validatorAddress: Address, amount: int) -> None:
+def transferValidatorIncentives(validatorAddress: Address, amount: uint64) -> None:
     Token.transfer(ADDRESS_VALIDATOR_INCENTIVES,
                 validatorAddress,
                 TOKEN_ID_LSK,
@@ -198,13 +203,14 @@ def transferValidatorIncentives(validatorAddress: Address, amount: int) -> None:
 This function returns the total amount of block incentives for liquidity providers in a block range with the given start height and end height. The incentives for the block at start height are excluded, the incentives for the block at end height are included.
 
 ```python
-def getLPIncentivesInRange(startHeight: int, endHeight: int) -> int:
+def getLPIncentivesInRange(startHeight: uint32, endHeight: uint32) -> int:
     if endHeight < startHeight:
         raise Exception()
-    EPOCHS = [LENGTH_EPOCH_REWARDS_INCENTIVES,
-        2*LENGTH_EPOCH_REWARDS_INCENTIVES,
-        3*LENGTH_EPOCH_REWARDS_INCENTIVES,
-        4*LENGTH_EPOCH_REWARDS_INCENTIVES]
+    EPOCHS = [BOOTSTRAP_PERIOD_OFFSET,
+        BOOTSTRAP_PERIOD_OFFSET + LENGTH_EPOCH_REWARDS_INCENTIVES,
+        BOOTSTRAP_PERIOD_OFFSET + 2*LENGTH_EPOCH_REWARDS_INCENTIVES,
+        BOOTSTRAP_PERIOD_OFFSET + 3*LENGTH_EPOCH_REWARDS_INCENTIVES,
+        BOOTSTRAP_PERIOD_OFFSET + 4*LENGTH_EPOCH_REWARDS_INCENTIVES]
     height = startHeight + 1    # incentives for the start block are excluded
     incentives = 0
     for changeHeight in EPOCHS:
