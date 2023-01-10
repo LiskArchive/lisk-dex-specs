@@ -118,11 +118,11 @@ We define the following constants:
 | `NUM_BYTES_POOL_ID`                | `uint32` | 20                     | The number of bytes of a pool ID.  |    
 | `NUM_BYTES_TICK_ID`                | `uint32` | 24                     | The number of bytes of a price tick ID.  |      
 | `NUM_BYTES_POSITION_ID`                | `uint32` | 28                     | The number of bytes of a position ID.  |     
-| `MAX_NUMBER_CROSSED_TICKS`                | `uint32` | TBD                     | Maximum number of price ticks to be crossed by a single swap.  |
-| `MAX_HOPS_SWAP`                | `uint32` | TBD                     | Maximum number of different pools that a complete swap can interact with.  |   
-| `MAX_NUM_POSITIONS_FEE_COLLECTION`  | `uint32` | TBD            | The maximum number of positions for which it is possible to collect fees in one transaction.                                 |
-| `POOL_CREATION_FEE`       | `uint64` | TBD    | This amount of tokens is transferred to the protocol fee account when creating a new pool.|
-| `POSITION_CREATION_FEE`   | `uint64` | TBD    | This amount of tokens is transferred to the protocol fee account when creating a new position.|       
+| `MAX_NUMBER_CROSSED_TICKS`                | `uint32` | 100             | Maximum number of price ticks to be crossed by a single swap command.  |
+| `MAX_HOPS_SWAP`                | `uint32` | 5                     | Maximum number of different pools that a complete swap can interact with.  |   
+| `MAX_NUM_POSITIONS_FEE_COLLECTION`  | `uint32` | 100            | The maximum number of positions for which it is possible to collect fees in one transaction.                                 |
+| `POOL_CREATION_FEE`       | `uint64` | 10 * 10^8    | This amount of tokens is transferred to the protocol fee account when creating a new pool.|
+| `POSITION_CREATION_FEE`   | `uint64` | 5000000 | This amount of tokens is transferred to the protocol fee account when creating a new position.|       
 | **DEX Incentives Module Constants**                |        |                  |                            |                            
 | `ADDRESS_LIQUIDITY_PROVIDER_INCENTIVES`                    | bytes |  `SHA256(b"liquidityProviderIncentivesAccount")[:NUM_BYTES_ADDRESS]`  | The address of the liquidity provider incentives account.  |
 | `ADDRESS_VALIDATOR_INCENTIVES`                    | bytes |  `SHA256(b"validatorIncentivesAccount")[:20]`  | The address of the validator incentives account.  |
@@ -159,8 +159,8 @@ We define the following constants:
 | **Math Constants**                         |        |                  |                                              |    
 | `MIN_TICK`                                  | `sint32`  | -887272     | The minimum possible tick value as a sint32. |
 | `MAX_TICK`                              | `sint32` | 887272       | The maximum possible tick value as a sint32. |
-| `MIN_SQRT_RATIO`                              | Q96 | 4295128738 | The minimum possible price value in the `Q96` representation, computed as `tickToPrice(MIN_TICK)` |
-| `MAX_SQRT_RATIO`                              | Q96 | 1461446703529909599612049957420313862569572983184 | The maximum possible price value in the `Q96` representation, computed as `tickToPrice(MAX_TICK)`. |
+| `MIN_SQRT_RATIO`                              | Q96 | 4295128735 | The minimum possible price value in the `Q96` representation, computed as `tickToPrice(MIN_TICK)` |
+| `MAX_SQRT_RATIO`                              | Q96 | 1461446704550679960896629428549052887957817041882 | The maximum possible price value in the `Q96` representation, computed as `tickToPrice(MAX_TICK)`. |
 | `LOG_MAX_TICK`   | `uint32`  |    19  |  The value computed as `⌊log(MAX_TICK, 2)⌋`, represents the maximal possible number of bits to record a value up to `MAX_TICK`. |
 | `PRICE_VALUE_FOR_BIT_POSITION_IN_Q96`   | list[Q96] |  See [Appendix](#price-value-for-tick-bit-position-array)     | Array of length `LOG_MAX_TICK` containing the pre-computed values of price for certain values of `tickValue` in the `Q96` representation. |
 | `PRICE_VALUE_FOR_TICK_1`   | Q96 |  79232123823359799118286999567 | The pre-computed value for `tickToPrice(1)` in the `Q96` representation. |
@@ -519,7 +519,7 @@ def getToken1Id(poolId: PoolID) -> TokenID:
 This function returns the amount of `token0` locked in a given pool. It uses the `getLockedAmount` function of the [Token module](https://github.com/LiskHQ/lips/blob/main/proposals/lip-0051.md).
 
 ```python
-def getToken0Amount(poolId: PoolID) -> int:
+def getToken0Amount(poolId: PoolID) -> uint64:
     address = poolIdToAddress(poolId)
     tokenId = getToken0Id(poolId)
     return Token.getLockedAmount(address, MODULE_NAME_DEX, tokenId)
@@ -530,7 +530,7 @@ def getToken0Amount(poolId: PoolID) -> int:
 This function returns the amount of `token1` locked in a given pool. It uses the `getLockedAmount` function of the [Token module](https://github.com/LiskHQ/lips/blob/main/proposals/lip-0051.md).
 
 ```python
-def getToken1Amount(poolId: PoolID) -> int:
+def getToken1Amount(poolId: PoolID) -> uint64:
     address = poolIdToAddress(poolId)
     tokenId = getToken1Id(poolId)
     return Token.getLockedAmount(address, MODULE_NAME_DEX, tokenId)
@@ -637,7 +637,7 @@ def transferPoolToPool(
 For a given pool and current height, the function computes the updated incentives per liquidity accumulator at this height.
 
 ```python
-def computeNewIncentivesPerLiquidity(poolId: PoolID, currentHeight: int) -> Q96:
+def computeNewIncentivesPerLiquidity(poolId: PoolID, currentHeight: uint32) -> Q96:
     if (poolId is not in pool.poolId for some pool in dexGlobalData.incentivizedPools)
         or pools[poolId].heightIncentivesUpdate >= currentHeight:
         raise Exception("Invalid arguments")
@@ -655,7 +655,7 @@ def computeNewIncentivesPerLiquidity(poolId: PoolID, currentHeight: int) -> Q96:
 The function updates the incentives per liquidity value of a given pool.
 
 ```python
-def updatePoolIncentives(poolId: PoolID, currentHeight: int) -> None:
+def updatePoolIncentives(poolId: PoolID, currentHeight: uint32) -> None:
     if (poolId is not in pool.poolId for some pool in dexGlobalData.incentivizedPools)
         or pools[poolId].heightIncentivesUpdate >= currentHeight:
         # pool is not incentivized or all incentives already collected
@@ -956,7 +956,7 @@ The function adds the given pool to the list of incentivized pools with the give
 ##### Execution
 
 ```python
-def updateIncentivizedPools(poolId: PoolID, multiplier: int, currentHeight: int) -> None:
+def updateIncentivizedPools(poolId: PoolID, multiplier: uint32, currentHeight: uint32) -> None:
     # update incentives per liquidity in all pools
     for pool in dexGlobalData.incentivizedPools:
         updatePoolIncentives(pool.poolId, currentHeight)
@@ -1075,7 +1075,7 @@ Returns the store value entry of a given tick ID in the price tick substore. It 
 Returns the store value entry of a given pool ID and tick value in the price tick substore. It raises an exception if there is no entry with the given ID.
 
 ```python
-    def getTick(poolId: PoolId, tickValue: int) -> object:
+    def getTick(poolId: PoolId, tickValue: int32) -> object:
         if ticks(poolId, tickValue) does not exist:
             raise Exception()
         return ticks(poolId, tickValue)
@@ -1095,8 +1095,8 @@ The function dry runs the swap with exact input command with the given parameter
 ##### Execution
 
 ```python
-def dryRunSwapExactIn(tokenIdIn: TokenID, amountIn: int, tokenIdOut: TokenID,
-        minAmountOut: int, swapRoute: list[PoolID]) -> tuple[int, int, Q96, Q96]:
+def dryRunSwapExactIn(tokenIdIn: TokenID, amountIn: uint64, tokenIdOut: TokenID,
+        minAmountOut: uint64, swapRoute: list[PoolID]) -> tuple[uint64, uint64, Q96, Q96]:
     if tokenIdIn == tokenIdOut or swapRoute is empty or length(swapRoute) > MAX_HOPS_SWAP:
         raise Exception("Invalid parameters")
     try:
@@ -1143,8 +1143,8 @@ The function dry runs the swap with exact output command with the given paramete
 ##### Execution
 
 ```python
-def dryRunSwapExactOut(tokenIdIn: TokenID, maxAmountIn: int, tokenIdOut: TokenID,
-        amountOut: int, swapRoute: list[PoolID]) -> tuple[int, int, Q96, Q96]:
+def dryRunSwapExactOut(tokenIdIn: TokenID, maxAmountIn: uint64, tokenIdOut: TokenID,
+        amountOut: uint64, swapRoute: list[PoolID]) -> tuple[uint64, uint64, Q96, Q96]:
     if tokenIdIn == tokenIdOut or swapRoute is empty or length(swapRoute) > MAX_HOPS_SWAP:
         raise Exception("Invalid parameters")
     try:
@@ -1217,7 +1217,7 @@ def getLSKPrice(tokenId: TokenID) -> Q96:
 The function returns the total value locked of a given pool in terms of LSK token. The TVL is computed as total amount of tokens in the pool multiplied by the current LSK price.
 
 ```python
-def getTVL(poolId: PoolID) -> int:
+def getTVL(poolId: PoolID) -> uint64:
     if getToken0Id == TOKEN_ID_LSK:
         # use internal price of the pool to compute the TVL in LSK
         token1ValueQ96 = div_96(div_96(Q96(getToken1Amount(poolId)), pools[poolId].sqrtPrice), pools[poolId].sqrtPrice)
