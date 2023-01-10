@@ -78,7 +78,6 @@ The table below defines some constants and notation used in the specifications b
 | `TOKEN_ID_DEX`                | `bytes`   |   TBD      | The token ID of the native token of the Lisk DEX chain. |
 | `ALL_SUPPORTED_TOKENS_KEY`    | `bytes `  |   see [Token module][lip-0051]  | An internal constant of the Token module. |
 | `ADDRESS_VALIDATOR_INCENTIVES`| `bytes`   |   see  [DEX module][dex-module] | The address of the validator incentives account. |
-| `LENGTH_EPOCH_REWARDS_INCENTIVES`| `uint32` |  see [DEX Incentives module][dex-incentives-module] | The duration of the epoch after which liquidity incentives decrease. |
 | `ED25519_PUBLIC_KEY_LENGTH`   |`uint32`   | 32          | Length in bytes of an Ed25519 public keys.           |
 | `BLS_PUBLIC_KEY_LENGTH`       |`uint32`   | 48          | Length in bytes of a BLS public key.                 |
 | `BLS_POP_LENGTH`              |`uint32`   | 96          | Length in bytes of a BLS proof of possession.        |
@@ -123,6 +122,8 @@ In general, the Lisk DEX chain uses the same value for all module-specific confi
 | [PoS][lip-0057]    | `PUNISHMENT_WINDOW_STAKING`  | 780,000        | The locking period for staking in case of a punishment. |
 | [PoS][lip-0057]    | `TOKEN_ID_POS`              | TOKEN_ID_DEX   | The token ID of the token used for staking.  |
 | [Dynamic Block Rewards][lip-0071] | `TOKEN_ID_DYNAMIC_BLOCK_REWARD` | TOKEN_ID_DEX | The token ID of the token used for block rewards.  |
+| [DEX Incentives module][dex-incentives-module] | `LENGTH_EPOCH_REWARDS_INCENTIVES` | 3153600 | The duration of the epoch after which liquidity incentives decrease. |
+| [DEX Incentives module][dex-incentives-module] | `BOOTSTRAP_PERIOD_OFFSET` | 259975 | The height of the first block after the bootstrap period. |
 
 ### Sidechain Registration Process
 
@@ -371,16 +372,16 @@ Further, the property `burntAmount` in the events [Generator Fee Processed][lip-
 
 ### Dynamic Block Rewards module
 
-The reward brackets for the [Dynamic Block Rewards][lip-0071] are given in the following table, where `offset = NUM_INIT_ROUNDS * 101 + 1` is the height of the first block that is not part of the bootstrap period.
+The reward brackets for the [Dynamic Block Rewards][lip-0071] are given in the following table.
 
 | Height `h`                                                                                          | Default Reward |
 |-----------------------------------------------------------------------------------------------------|----------------|
-|  `h < offset`                                                                                       |         0      |
-| `offset <= h < LENGTH_EPOCH_REWARDS_INCENTIVES + offset`                                           | 400000000      |
-| `offset + LENGTH_EPOCH_REWARDS_INCENTIVES <= h < 2 * LENGTH_EPOCH_REWARDS_INCENTIVES + offset`    | 350000000      |
-| `offset + 2 * LENGTH_EPOCH_REWARDS_INCENTIVES <= h < 3 * LENGTH_EPOCH_REWARDS_INCENTIVES + offset`| 300000000      |
-| `offset + 3 * LENGTH_EPOCH_REWARDS_INCENTIVES <= h < 4 * LENGTH_EPOCH_REWARDS_INCENTIVES + offset`| 250000000      |
-| `offset + 4 * LENGTH_EPOCH_REWARDS_INCENTIVES <= h`                                                | 200000000      |
+|  `h < BOOTSTRAP_PERIOD_OFFSET`                                                                                       |         0      |
+| `BOOTSTRAP_PERIOD_OFFSET <= h < LENGTH_EPOCH_REWARDS_INCENTIVES + BOOTSTRAP_PERIOD_OFFSET`                                           | 400000000      |
+| `BOOTSTRAP_PERIOD_OFFSET + LENGTH_EPOCH_REWARDS_INCENTIVES <= h < 2 * LENGTH_EPOCH_REWARDS_INCENTIVES + BOOTSTRAP_PERIOD_OFFSET`    | 350000000      |
+| `BOOTSTRAP_PERIOD_OFFSET + 2 * LENGTH_EPOCH_REWARDS_INCENTIVES <= h < 3 * LENGTH_EPOCH_REWARDS_INCENTIVES + BOOTSTRAP_PERIOD_OFFSET`| 300000000      |
+| `BOOTSTRAP_PERIOD_OFFSET + 3 * LENGTH_EPOCH_REWARDS_INCENTIVES <= h < 4 * LENGTH_EPOCH_REWARDS_INCENTIVES + BOOTSTRAP_PERIOD_OFFSET`| 250000000      |
+| `BOOTSTRAP_PERIOD_OFFSET + 4 * LENGTH_EPOCH_REWARDS_INCENTIVES <= h`                                                | 200000000      |
 
 ## Backwards Compatibility
 
