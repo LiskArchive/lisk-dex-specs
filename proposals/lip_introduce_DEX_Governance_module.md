@@ -412,13 +412,13 @@ createProposalParamsSchema = {
 
 ##### Verification
 
-The function [getAvailableBalance][getAvailableBalance] is defined in the Token module, [getLockedVotedAmount][getLockedVotedAmount] in the PoS module and [poolExists][poolExists] in the DEX module.
+The function [getAvailableBalance][getAvailableBalance] is defined in the Token module, [getLockedStakedAmount][getLockedStakedAmount] in the PoS module and [poolExists][poolExists] in the DEX module.
 
 ```python
 def verify(trs: Transaction) -> None:
     senderAddress = SHA256(trs.senderPublicKey)[:LENGTH_ADDRESS]
     availableBalance = Token.getAvailableBalance(senderAddress, TOKEN_ID_DEX_NATIVE)
-    lockedBalance = PoS.getLockedVotedAmount(senderAddress)
+    lockedBalance = PoS.getLockedStakedAmount(senderAddress)
     if availableBalance + lockedBalance < MINIMAL_BALANCE_PROPOSE:
         raise Exception("Insufficient DEX native token balance to create proposal")
     if availableBalance < FEE_PROPOSAL_CREATION:
@@ -527,14 +527,14 @@ def verify(trs: Transaction) -> None:
 
 ##### Execution
 
-The function [getLockedVotedAmount][getLockedVotedAmount] is defined in the PoS module.
+The function [getLockedStakedAmount][getLockedStakedAmount] is defined in the PoS module.
 
 ```python
 def execute(trs: Transaction) -> None:
     index = trs.params.proposalIndex
     senderAddress = SHA256(trs.senderPublicKey)[:LENGTH_ADDRESS]
     currentHeight = height of the block containing trs
-    stakedAmount = PoS.getLockedVotedAmount(senderAddress)
+    stakedAmount = PoS.getLockedStakedAmount(senderAddress)
     if votesStore[senderAddress] does not exist:
         votesStore[senderAddress] = []
 
@@ -1049,7 +1049,7 @@ def verifyGenesisBlock(b: GenesisBlock) -> None:
 [dexIncentivesModule]: https://github.com/LiskHQ/lips-staging/blob/main/proposals/lip_introduce_DEX_Rewards_module.md
 [poolExists]: https://github.com/LiskHQ/lips-staging/blob/main/proposals/lip-introduce_DEX_Module.md#poolexists
 [updateIncentivizedPools]: https://github.com/LiskHQ/lips-staging/blob/main/proposals/lip-introduce_DEX_Module.md#updateincentivizedpools
-[getLockedVotedAmount]: https://github.com/LiskHQ/lips-staging/blob/main/proposals/lip-0057.md#getlockedvotedamount
+[getLockedStakedAmount]: https://github.com/LiskHQ/lips-staging/blob/main/proposals/lip-0057.md#getlockedstakedamount
 [posModule]: https://github.com/LiskHQ/lips-staging/blob/main/proposals/lip-0057.md
 [payFee]: https://github.com/LiskHQ/lips/blob/main/proposals/lip-0048.md#payfee
 [getAvailableBalance]: https://github.com/LiskHQ/lips/blob/main/proposals/lip-0051.md#getavailablebalance
