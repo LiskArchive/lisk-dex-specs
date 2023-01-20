@@ -47,7 +47,7 @@ These payout algorithms aim to incentivize the actors proportionally to their co
 
 ### Validator Incentives
 
-Once every round DEX incentives module distributes the LSK tokens from the validator incentives account among the current validators. Note that the payout is not tied to the beginning or end of the round, it just happens every `ROUND_LENGTH` blocks. Standby delegates receive an average share (computed as total amount of incentives divided by the number of validators), other delegates share the rest of incentives proportionally to their BFT weight. In this way the incentives correspond to the validator contribution to the sidechain.
+Once every round DEX incentives module distributes the LSK tokens from the validator incentives account among the current validators. Note that the payout is not tied to the beginning or end of the round, it just happens every `ROUND_LENGTH` blocks. Standby validators receive an average share (computed as total amount of incentives divided by the number of validators), other validators share the rest of incentives proportionally to their BFT weight. In this way the incentives correspond to the validator contribution to the sidechain.
 
 Validator incentives are collected as a percentage of all LSK swap fees. Also minimal transaction fees and command specific fees on the DEX sidechain could be awarded to the validators, this logic could be specified in the Fee module on the DEX sidechain.
 
@@ -155,17 +155,17 @@ def transferAllValidatorLSKIncentives(validators: list[Validator]) -> None:
     if availableIncentives != 0:
         Token.unlock(ADDRESS_VALIDATOR_INCENTIVES, MODULE_NAME_DEX, TOKEN_ID_LSK, availableIncentives)
         totalWeight = 0
-        # distribute incentives to standby delegates
+        # distribute incentives to standby validators
         standByShare = availableIncentives // length(validators)    # use integer division
         for validator in validators:
             # in parallel compute the total BFT weight
             totalWeight += validator.bftWeight
             if validator.bftWeight == 0:
-                # standby delegate
+                # standby validator
                 transferValidatorIncentives(validator.address, standByShare)
                 availableIncentives -= standByShare
 
-        # distribute the rest of incentives to active delegates proportionally to the weight
+        # distribute the rest of incentives to active validators proportionally to the weight
         incentivePerBFTWeight = div_96(Q96(availableIncentives), Q96(totalWeight))
         for validator in validators:
             if validator.bftWeight != 0:
@@ -186,7 +186,7 @@ def transferValidatorIncentives(validatorAddress: Address, amount: uint64) -> No
                 validatorAddress,
                 TOKEN_ID_LSK,
                 amount)
-    DPoS.updateSharedRewards(validatorAddress, TOKEN_ID_LSK, amount)  # enable reward sharing for LSK incentives as well
+    PoS.updateSharedRewards(validatorAddress, TOKEN_ID_LSK, amount)  # enable reward sharing for LSK incentives as well
     emitEvent(
         module = MODULE_NAME_DEX_INCENTIVES,
         type = EVENT_NAME_VALIDATOR_INCENTIVES_PAYOUT,
