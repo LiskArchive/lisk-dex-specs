@@ -64,8 +64,9 @@ This LIP uses constants and types defined in the ["Introduce DEX Module" LIP][de
 | --------------------------------- | -------- | ----- | ------------------------------------------------------------------------------------------------------------------------- |
 | `SWAP_FAILED_INVALID_ROUTE`       | `uint32` | 0     | Return code for the failed swap event in case of invalid swap route                                                       |
 | `SWAP_FAILED_TOO_MANY_TICKS`      | `uint32` | 1     | Return code for the failed swap event in case of crossing too many ticks                                                  |
-| `SWAP_FAILED_NOT_ENOUGH`          | `uint32` | 2     | Return code for the failed swap event in case of insufficient amount of output tokens or excessive amount of input tokens |
-| `SWAP_FAILED_INVALID_LIMIT_PRICE` | `uint32` | 3     | Return code for the failed swap event in case of invalid limit price value for the swap with price limit command          |
+| `SWAP_FAILED_NOT_EXACT_AMOUNT`    | `uint32` | 2     | Return code for the failed swap event in case of failing to swap exact amount in or out                                                    |
+| `SWAP_FAILED_NOT_ENOUGH`          | `uint32` | 3     | Return code for the failed swap event in case of insufficient amount of output tokens or excessive amount of input tokens |
+| `SWAP_FAILED_INVALID_LIMIT_PRICE` | `uint32` | 4     | Return code for the failed swap event in case of invalid limit price value for the swap with price limit command          |
 | `FEE_TIER_PARTITION`              | `uint32` |1000000| The inverse of the fee tier precision                                                                                     |
 
 #### Logic from Other Modules
@@ -215,7 +216,7 @@ swapExactInCommandSchema = {
             "type": "array",
             "fieldNumber": 5,
             "items": {
-                "dataType": "bytes"
+                "dataType": "bytes",
                 "length": NUM_BYTES_POOL_ID
             }
         },
@@ -249,7 +250,7 @@ def verify(trs: Transaction) -> None:
     lastPool = trs.params.swapRoute[-1]
     if getToken0Id(firstPool) != trs.params.tokenIdIn and getToken1Id(firstPool) != trs.params.tokenIdIn:
         raise Exception()
-    if getToken0Id(lastPool) != trs.params.tokenIdOut and getToken1Id(firstPool) != trs.params.tokenIdOut:
+    if getToken0Id(lastPool) != trs.params.tokenIdOut and getToken1Id(lastPool) != trs.params.tokenIdOut:
         raise Exception()
     if trs.params.maxTimestampValid < lastBlockheader.timestamp:
         raise Exception()
@@ -288,12 +289,15 @@ def execute(trs: Transaction) -> None:
         # if zeroToOne then price decreases after the swap, otherwise it increases
         sqrtLimitPrice = zeroToOne ? MIN_SQRT_RATIO : MAX_SQRT_RATIO
         try:
-            (amountIn, amountOut, feesIn, feesOut, numCrossedTicks) = swap(poolId, zeroToOne, sqrtLimitPrice, currentTokenIn.amount, False, numCrossedTicks, currentHeight)
+            (amountIn, amountOut, feesIn, feesOut, numCrossedTicks) = swap(poolId, zeroToOne, sqrtLimitPrice, currentTokenIn.amount, True, numCrossedTicks, currentHeight)
         except ExceptionSwapCrossedTooManyTicks:    # specific exception class for crossing too many ticks
             # crossed too many ticks
             raiseSwapException(SWAP_FAILED_TOO_MANY_TICKS, tokenIdIn,
                                 tokenIdOut, senderAddress)
-
+        if amountIn != currentTokenIn.amount:
+            # the pool is depleted before swapping in the full amount
+            raiseSwapException(SWAP_FAILED_NOT_EXACT_AMOUNT, tokenIdIn,
+                                tokenIdOut, senderAddress)
         tokens.append({id:IdOut, amount: amountOut})
         fees.append({in: feesIn, out: feesOut})
 
@@ -398,7 +402,7 @@ swapExactOutCommandSchema = {
 
 ```python
 def verify(trs: Transaction) -> None:
-    if trs.params does not satisfy swapExactInCommandSchema:
+    if trs.params does not satisfy swapExactOutCommandSchema:
         raise Exception()
     if trs.params.tokenIdIn == trs.params.tokenIdOut:
         raise Exception()
@@ -408,7 +412,7 @@ def verify(trs: Transaction) -> None:
     lastPool = trs.params.swapRoute[-1]
     if getToken0Id(firstPool) != trs.params.tokenIdIn and getToken1Id(firstPool) != trs.params.tokenIdIn:
         raise Exception()
-    if getToken0Id(lastPool) != trs.params.tokenIdOut and getToken1Id(firstPool) != trs.params.tokenIdOut:
+    if getToken0Id(lastPool) != trs.params.tokenIdOut and getToken1Id(lastPool) != trs.params.tokenIdOut:
         raise Exception()
     if trs.params.maxTimestampValid < lastBlockheader.timestamp:
         raise Exception()
@@ -452,7 +456,10 @@ def execute(trs: Transaction) -> None:
             # crossed too many ticks
             raiseSwapException(SWAP_FAILED_TOO_MANY_TICKS, tokenIdIn,
                                 tokenIdOut, senderAddress)
-
+        if amountOut != currentTokenOut.amount:
+            # the pool is depleted before swapping out the full amount
+            raiseSwapException(SWAP_FAILED_NOT_EXACT_AMOUNT, tokenIdIn,
+                                tokenIdOut, senderAddres)
         tokens.append({id:IdIn, amount: amountIn})
         fees.append({in: feesIn, out: feesOut})
 
@@ -562,7 +569,7 @@ swapWithPriceLimitCommandSchema = {
 
 ```python
 def verify(trs: Transaction) -> None:
-    if trs.params does not satisfy swapExactInCommandSchema:
+    if trs.params does not satisfy swapWithPriceLimitCommandSchema:
         raise Exception()
     if trs.params.tokenIdIn == trs.params.tokenIdOut:
         raise Exception()
@@ -668,7 +675,7 @@ Unlike the [swap function][swapuniswap] of Uniswap v3, this function does not se
 ##### Returns
 
 - `amountIn`: The total amount of the input token to be swapped in, including all the fees.
-- `amountOut`: The total amount of the output token to be swapped out.
+- `amountOut`: The total amount of the output token to be swapped out after all the fees are paid.
 - `totalFeesIn`: The amount of fees to pay in the swap input tokens.
 - `totalFeesOut`: The amount of fees to pay in the swap output tokens.
 - `numCrossedTicks`: The total number of ticks crossed after swapping in the given pool.
@@ -692,13 +699,19 @@ def swap(poolId: PoolID,
     # if zeroToOne then price decreases after the swap, otherwise it increases
     if (zeroToOne and sqrtLimitPrice >= poolSqrtPriceQ96) or
         (not zeroToOne and sqrtLimitPrice <= poolSqrtPriceQ96):
-        return (0,0,0,0)
+        return (0,0,0,0,0)
 
     amountRemaining = amountSpecified
     amountTotalIn = 0
     amountTotalOut = 0
     totalFeesIn = 0
     totalFeesOut = 0
+    if zeroToOne:
+        tokenIn = getToken0Id(poolId)
+        tokenOut = getToken1Id(poolId)
+    else:
+        tokenIn = getToken1Id(poolId)
+        tokenOut = getToken0Id(poolId)
 
     # loop like Figure 4 in uniswap v3 whitepaper until amount is exhausted, price limit is reached, or max number of ticks crossed
     # we use != for prices because otherwise we need to account for approaching limit price from above and from below
@@ -707,42 +720,73 @@ def swap(poolId: PoolID,
             raise ExceptionSwapCrossedTooManyTicks() # specific exception class for crossing too many ticks
 
         currentTick = priceToTick(poolSqrtPriceQ96)
-        if zeroToOne and ticks(poolId, currentTick) exists and poolSqrtPriceQ96 ==  tickToPrice(currentTick):
-            # need to cross the current tick from right to left
-            crossTick(currentTick, False, currentHeight)
-            numCrossedTicks += 1
-
         # get the price for the next tick
         if zeroToOne:
-            nextTick = next initialized tick < currentTick
+            nextTick = value of next initialized tick < currentTick
         else:
-            nextTick = next initialized tick > currentTick
+            nextTick = value of next initialized tick > currentTick
+
+        if nextTick does not exist:
+            # reached the end of liquidity
+            break
+
         sqrtNextTickPriceQ96 = tickToPrice(nextTick)
 
-        if [(zeroToOne and sqrtNextTickPriceQ96 < sqrtLimitPrice) or
-                (not zeroToOne and sqrtNextTickPriceQ96 > sqrtLimitPrice)]:
+        if zeroToOne and ticks(poolId, currentTick) exists and poolSqrtPriceQ96 ==  tickToPrice(currentTick):
+            # need to cross the current tick from right to left
+            crossTick(poolId + tickToBytes(currentTick), False, currentHeight)
+            numCrossedTicks += 1
+
+        if pools[poolId].liquidity == 0:
+            # jump to the next initialized tick, hope that it has liquidity
+            poolSqrtPriceQ96 = sqrtNextTickPriceQ96
+            if not zeroToOne:
+                crossTick(poolId + tickToBytes(nextTick), True, currentHeight)
+                numCrossedTicks += 1
+            continue
+
+        # case of non-zero pool liquidity at the current price
+        if (zeroToOne and sqrtNextTickPriceQ96 < sqrtLimitPrice) or
+                (not zeroToOne and sqrtNextTickPriceQ96 > sqrtLimitPrice):
             sqrtTargetPrice = sqrtLimitPrice
         else:
             sqrtTargetPrice = sqrtNextTickPriceQ96
 
         # compute the remaining amount to swap in or to get out of the swap
-        firstFee = muldiv_96_RoundUp(Q96(amountRemaining), Q96(feeTier/2), Q96(FEE_TIER_PARTITION))
-        amountRemainingTemp = amountRemaining - firstFee
+        feeCoeffAmountAfter = div_96(Q96(feeTier/2), Q96(FEE_TIER_PARTITION - feeTier/2))
+        feeCoeffAmountBefore = div_96(Q96(feeTier/2), Q96(FEE_TIER_PARTITION))
+        if exactInput:
+            # The amount remaining includes input fees, subtract them
+            firstInFee = roundUp_96(mul_96(Q96(amountRemaining), feeCoeffAmountBefore))
+            amountRemainingTemp = amountRemaining - firstInFee
+        else:
+            # The amount remaining does not include output fees, add them
+            firstOutFee = roundUp_96(mul_96(Q96(amountRemaining),feeCoeffAmountAfter))
+            amountRemainingTemp = amountRemaining + firstOutFee
 
         # compute the swap within price tick or price limit reached
         (poolSqrtPriceQ96, amountIn, amountOut) = swapWithin(poolSqrtPriceQ96, sqrtTargetPrice, pools[poolId].liquidity, amountRemainingTemp, exactInput)
-
-        # feeIn is feeTier/FEE_TIER_PARTITION fraction of the feeIn + amountIn
-        feeCoeff = div_96(Q96(feeTier/2), Q96(FEE_TIER_PARTITION - feeTier/2))
-        feeIn = roundUp_96(mul_96(Q96(amountIn), feeCoeff))
-        feeOut = roundUp_96(mul_96(Q96(amountOut), feeCoeff))
+        if poolSqrtPriceQ96 != sqrtTargetPrice:
+            # swapped through all the remaining amount,
+            # fee should be exactly as estimated before the swap to avoid dust leftovers
+            if exactInput:
+                feeIn = amountRemaining - amountIn
+                feeOut = roundUp_96(mul_96(Q96(amountOut), feeCoeffAmountBefore))
+            else:
+                feeIn = roundUp_96(mul_96(Q96(amountIn), feeCoeffAmountAfter))
+                feeOut = amountOut - amountRemaining
+        else:
+            # feeIn is feeTier/FEE_TIER_PARTITION fraction of the feeIn + amountIn
+            # feeOut is feeTier/FEE_TIER_PARTITION of amountOut
+            feeIn = roundUp_96(mul_96(Q96(amountIn), feeCoeffAmountAfter))
+            feeOut = roundUp_96(mul_96(Q96(amountOut), feeCoeffAmountBefore))
         # update the remaining amount after a swap within a tick
         if exactInput:
             amountRemaining -= (amountIn + feeIn)
         else:
-            amountRemaining -= (amountOut + feeOut)
+            amountRemaining -= (amountOut - feeOut)
 
-        amountTotalOut += amountOut + feeOut
+        amountTotalOut += amountOut - feeOut
         amountTotalIn += amountIn + feeIn
 
         totalFeesIn += feeIn
@@ -767,13 +811,13 @@ def swap(poolId: PoolID,
         # if sqrtNextTickPriceQ96 was reached by increasing the price,
         # cross the next tick from left to right
         if poolSqrtPriceQ96 == sqrtNextTickPriceQ96 and not zeroToOne:
-            crossTick(nextTick, True, currentHeight)
+            crossTick(poolId + tickToBytes(nextTick), True, currentHeight)
             numCrossedTicks += 1
 
     # update the pool's state with the correct sqrtPrice
     pools[poolId].sqrtPrice = q96ToBytes(poolSqrtPriceQ96)
 
-    return (amountTotalIn, amountTotalOut, totalFeesIn, totalFeesOut)
+    return (amountTotalIn, amountTotalOut, totalFeesIn, totalFeesOut, numCrossedTicks)
 ```
 
 where the functions `bytesToQ96`, `q96ToBytes`, `getFeeTier`, `priceToTick`, `tickToPrice` and all operations on Q96 numbers are defined in the [Introduce DEX module LIP][dexmodulelip].
@@ -832,7 +876,9 @@ def swapWithin(
     else:
         # update price depending on whether amountRemaining represents token0 or token1
         # and whether it is amount to add to the pool (exactInput) or subtract from the pool.
-        sqrtUpdatedPrice = computeNextPrice(sqrtCurrentPrice, liquidity, amountRemaining, zeroToOne, exactInput)
+        isToken0 = exactInput ? zeroToOne : !zeroToOne
+        addsAmount = exactInput
+        sqrtUpdatedPrice = computeNextPrice(sqrtCurrentPrice, liquidity, amountRemaining, isToken0, addsAmount)
 
     # calculate the actual input and output amounts. The updated price guarantees that amountRemaining
     # will not be exceeded, independently whether it is of token0 or token1
@@ -1143,7 +1189,7 @@ def getRoute(tokenIn: TokenID, tokenOut: TokenID, poolsGraph: PoolsGraph, amount
     return bestRoute
 ```
 
-[dexmodulelip]: https://github.com/LiskHQ/lips-staging/blob/lip-Introduce_DEX_Module/proposals/lip-introduce_DEX_Module.md
+[dexmodulelip]: https://github.com/LiskHQ/lips-staging/blob/main/proposals/lip-introduce_DEX_Module.md
 [dexmodulelipappendix]: https://github.com/LiskHQ/lips-staging/blob/lip-Introduce_DEX_Module/proposals/lip-introduce_DEX_Module.md#Appendix
 [uniswapv3whitepaper]: https://uniswap.org/whitepaper-v3.pdf
 [tokenidlip]: https://github.com/LiskHQ/lips/blob/main/proposals/lip-0051.md#token-identification
