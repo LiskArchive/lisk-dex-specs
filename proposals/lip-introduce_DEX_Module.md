@@ -642,11 +642,15 @@ def computeNewIncentivesPerLiquidity(poolId: PoolID, currentHeight: uint32) -> Q
         or pools[poolId].heightIncentivesUpdate >= currentHeight:
         raise Exception("Invalid arguments")
 
+    currentIncentivesPerLiquidity = bytesToQ96(pools[poolId].incentivesPerLiquidityAccumulator)
+    if dexGlobalData.totalIncentivesMultiplier == 0 or Q96(pools[poolId].liquidity) == Q96(0):
+        # no incentives if no pools are incentivized or if there is no liquidity
+        return currentIncentivesPerLiquidity
+
     poolMultiplier = pool.multiplier for pool in dexGlobalData.incentivizedPools with pool.poolId == poolId
     totalIncentives = DEXIncentives.getLPIncentivesInRange(pools[poolId].heightIncentivesUpdate, currentHeight)
     incentives = muldiv_96(Q96(totalIncentives), Q96(poolMultiplier), Q96(dexGlobalData.totalIncentivesMultiplier))
     incentivesPerLiquidity = div_96(incentives, Q96(pools[poolId].liquidity))
-    currentIncentivesPerLiquidity = bytesToQ96(pools[poolId].incentivesPerLiquidityAccumulator)
     return add_96(incentivesPerLiquidity, currentIncentivesPerLiquidity)
 ```
 
@@ -957,6 +961,8 @@ The function adds the given pool to the list of incentivized pools with the give
 
 ```python
 def updateIncentivizedPools(poolId: PoolID, multiplier: uint32, currentHeight: uint32) -> None:
+    if poolId not in pools:
+        raise Exception("Pool with the given ID does not exist")
     # update incentives per liquidity in all pools
     for pool in dexGlobalData.incentivizedPools:
         updatePoolIncentives(pool.poolId, currentHeight)
@@ -969,6 +975,7 @@ def updateIncentivizedPools(poolId: PoolID, multiplier: uint32, currentHeight: u
         dexGlobalData.totalIncentivesMultiplier += multiplier
         dexGlobalData.incentivizedPools.append({"poolId": poolId, "multiplier": multiplier})
         sort dexGlobalData.incentivizedPools with respect to poolId in ascending order
+        pools[poolId].heightIncentivesUpdate = currentHeight
 ```
 
 ### Endpoints for Off-Chain Services
@@ -1105,6 +1112,8 @@ def dryRunSwapExactIn(tokenIdIn: TokenID, amountIn: uint64, tokenIdOut: TokenID,
         raise Exception("Invalid swap route")
 
     tokens = [{id: tokenIdIn, amount: amountIn}]
+    numCrossedTicks = 0
+    currentHeight = current height of the last block
     # swap along all the pools in swapRoute
     for poolId in swapRoute:
         currentTokenIn = tokens[-1]
@@ -1118,11 +1127,14 @@ def dryRunSwapExactIn(tokenIdIn: TokenID, amountIn: uint64, tokenIdOut: TokenID,
         # if zeroToOne then price decreases after the swap, otherwise it increases
         sqrtLimitPrice = zeroToOne ? MIN_SQRT_RATIO : MAX_SQRT_RATIO
         try:
-            (amountIn, amountOut, feesIn, feesOut) = swap(poolId, zeroToOne, sqrtLimitPrice, currentTokenIn.amount, False)
+            (amountIn, amountOut, feesIn, feesOut, numCrossedTicks) = swap(poolId, zeroToOne, sqrtLimitPrice, currentTokenIn.amount, True, numCrossedTicks, currentHeight)
         except ExceptionSwapCrossedTooManyTicks:
             raise Exception("Crossed too many ticks")
+        if amountIn != currentTokenIn.amount:
+            raise Exception("Failed to swap exact amount in")
         tokens.append({id:IdOut, amount: amountOut})
         fees.append({in: feesIn, out: feesOut})
+    # check that amount out is at least the minimum required amount
     if tokens[-1].amount < minAmountOut:
         raise Exception("Too low output amount")
     priceAfter = computeCurrentPrice(tokenIdIn, tokenIdOut, swapRoute)
@@ -1154,10 +1166,11 @@ def dryRunSwapExactOut(tokenIdIn: TokenID, maxAmountIn: uint64, tokenIdOut: Toke
 
     inverseSwapRoute = invert swapRoute
     tokens = [{id: tokenIdOut, amount: amountOut}]
+    numCrossedTicks = 0
+    currentHeight = current height of the last block
     # swap along all the pools in inverseSwapRoute
     for poolId in inverseSwapRoute:
         currentTokenOut = tokens[-1]
-
         if getToken1Id(poolId) == currentTokenOut.id:
             zeroToOne = True
             IdIn = getToken0Id(poolId)
@@ -1168,14 +1181,14 @@ def dryRunSwapExactOut(tokenIdIn: TokenID, maxAmountIn: uint64, tokenIdOut: Toke
         # if zeroToOne then price decreases after the swap, otherwise it increases
         sqrtLimitPrice = zeroToOne ? MIN_SQRT_RATIO : MAX_SQRT_RATIO
         try:
-            (amountIn, amountOut, feesIn, feesOut) = swap(poolId, zeroToOne, sqrtLimitPrice, currentTokenOut.amount, False)
+            (amountIn, amountOut, feesIn, feesOut, numCrossedTicks) = swap(poolId, zeroToOne, sqrtLimitPrice, currentTokenOut.amount, False, numCrossedTicks, currentHeight)
         except ExceptionSwapCrossedTooManyTicks:
             raise Exception("Crossed too many ticks")
-
+        if amountOut != currentTokenOut.amount:
+            raise Exception("Failed to swap exact amount out")
         tokens.append({id:IdIn, amount: amountIn})
         fees.append({in: feesIn, out: feesOut})
-
-    # check that amount out is at least the minimum required amount
+    # check that amount in is at most the maximal required amount
     if  tokens[-1].amount >  maxAmountIn:
         raise Exception("Too high input amount")
     priceAfter = computeCurrentPrice(tokenIdIn, tokenIdOut, swapRoute)
