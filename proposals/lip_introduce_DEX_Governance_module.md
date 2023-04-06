@@ -452,7 +452,7 @@ def execute(trs: Transaction) -> None:
         raise Exception("Incentivized pool does not exist")
 
     # command execution
-    Fee.payFee(trs.params.proposalFee)
+    Fee.payFee(FEE_PROPOSAL_CREATION)
     index = indexStore.newestIndex + 1
     currentHeight = height of the block containing trs
     proposalsStore[index] = encode(proposalSchema, {
