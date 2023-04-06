@@ -51,7 +51,7 @@ This will imply an inflation of approximately 25 % in the first year starting fr
 ### Fees
 
 Instead of burning the minimum fee and any additional command-specific fee incurred due to a call of the [payFee][lip-0048#payfee] method, in the Lisk DEX sidechain these fees are distributed among all validators of a round, proportional to their weight.
-This is achieved by first transferring the fees to the account with address `ADDRESS_VALIDATOR_INCENTIVES` as specified [below](#fee-module) and then distributing them as defined in the [DEX Incentives module][dex-incentives-module].
+This is achieved by first transferring the fees to the account with address `ADDRESS_VALIDATOR_INCENTIVES` using the configurable constant `ADDRESS_FEE_POOL` defined in [LIP 0048][lip-0048] and then distributing them as defined in the [DEX Incentives module][dex-incentives-module].
 The main reason for this is to make it more attractive to become a validator on the Lisk DEX blockchain due to these additional fees.
 This is expected to increase the value of the DEX native token and therefore overall increase the security of the blockchain.
 
@@ -72,7 +72,8 @@ The table below defines some constants and notation used in the specifications b
 | `NUM_INIT_ROUNDS`             | `uint32`  |   2574     | The number of rounds that the bootstrap validators are active. The number of rounds is equal to `260000 // 101`. |
 | `NUM_BOOTSTRAP_VALIDATORS`    | `uint32`  |   101      | The number of bootstrap validators.                   |
 | `MODULE_NAME_DEX`             | `string`  |   see [DEX module][dex-module] | The module name of the DEX module.  |
-| `MODULE_NAME_PoS`             | `string`  |   see [PoS module][lip-0057] | The module name of the PoS module.  |
+| `MODULE_NAME_INTEROPERABILITY`| `string`  |   see [Interoperability module][lip-0045] | The module name of the Interoperability module. |
+| `MODULE_NAME_POS`             | `string`  |   see [PoS module][lip-0057] | The module name of the PoS module.  |
 | `MODULE_NAME_TOKEN`           | `string`  |   see [Token module][lip-0051] | The module name of the Token module.|
 | `ADDRESS_LENGTH`              | `uint32`  |   20       | The number of bytes of an address.                    |
 | `TOKEN_ID_DEX`                | `bytes`   |   TBD      | The token ID of the native token of the Lisk DEX chain. |
@@ -114,7 +115,7 @@ Lisk DEX v1 uses the following modules, where the given order defines the module
 
 #### Module-Specific Configurable Constants
 
-In general, the Lisk DEX chain uses the same value for all module-specific configurable constant as also used by the Lisk Mainchain. These values can be found in the respective module LIPs and also in [LIP 0063][lip-0063#constants]. Further, the constants related to the [DEX module][dex-governance-module], [DEX Incentives module][dex-incentives-module#notation-and-constants] and [DEX Governance module][dex-governance-module#notation-and-constants] can be found in the respective specification sections. The following table contains only constants that are chosen differently from the Lisk Mainchain values.
+In general, the Lisk DEX chain uses the same value for all module-specific configurable constant as also used by the Lisk Mainchain. These values can be found in the respective module LIPs and also in [LIP 0063][lip-0063#constants]. Further, the constants related to the [DEX module][dex-module#notation-and-constants], [DEX Incentives module][dex-incentives-module#notation-and-constants] and [DEX Governance module][dex-governance-module#notation-and-constants] can be found in the respective specification sections. The following table contains only constants that are chosen differently from the Lisk Mainchain values.
 
 | Module             | Name                        | Value          | Description                       |
 |--------------------|-----------------------------|----------------|-----------------------------------|
@@ -122,8 +123,9 @@ In general, the Lisk DEX chain uses the same value for all module-specific confi
 | [PoS][lip-0057]    | `PUNISHMENT_WINDOW_STAKING`  | 780,000        | The locking period for staking in case of a punishment. |
 | [PoS][lip-0057]    | `TOKEN_ID_POS`              | TOKEN_ID_DEX   | The token ID of the token used for staking.  |
 | [Dynamic Block Rewards][lip-0071] | `TOKEN_ID_DYNAMIC_BLOCK_REWARD` | TOKEN_ID_DEX | The token ID of the token used for block rewards.  |
-| [DEX Incentives module][dex-incentives-module] | `LENGTH_EPOCH_REWARDS_INCENTIVES` | 3153600 | The duration of the epoch after which liquidity incentives decrease. |
-| [DEX Incentives module][dex-incentives-module] | `BOOTSTRAP_PERIOD_OFFSET` | 259975 | The height of the first block after the bootstrap period. |
+| [DEX Incentives][dex-incentives-module] | `LENGTH_EPOCH_REWARDS_INCENTIVES` | 3153600 | The duration of the epoch after which liquidity incentives decrease. |
+| [DEX Incentives][dex-incentives-module] | `BOOTSTRAP_PERIOD_OFFSET` | 259975 | The height of the first block after the bootstrap period. |
+| [Fee][lip-0048]    | `ADDRESS_FEE_POOL`     | `ADDRESS_VALIDATOR_INCENTIVES`        | Address to where the minimum fee is transferred, see [LIP 0048][lip-0048] for details. |
 
 ### Sidechain Registration Process
 
@@ -163,6 +165,7 @@ In particular, `b.assets` must be sorted by lexicographical order of the `module
 For the Lisk DEX v1 blockchain only for the following registered modules an entry is added to the asset of the genesis block `b.assets`:
 
 - [DEX][dex-module]
+- [Interoperability][lip-0045]
 - [PoS][lip-0057]
 - [Token][lip-0051]
 
@@ -192,6 +195,23 @@ def computeDEXGenesisAsset():
 
     data = encode(genesisDEXSchema, dexModuleAsset)
     return {"module": MODULE_NAME_DEX, "data": data}
+```
+
+##### Interoperability module
+
+Let `genesisInteroperabilityStoreSchema` be the schema for the genesis asset of the [Interoperability module][lip-0045#genesis-assets-schema]. The following function then computes the genesis block asset for the DEX module.
+
+```python
+def computeInteroperabilityGenesisAsset():
+    interoperabilityModuleAsset = object following genesisInteroperabilityStoreSchema
+    interoperabilityModuleAsset.ownChainName = ""
+    interoperabilityModuleAsset.ownChainNonce = 0
+    interoperabilityModuleAsset.chainInfos = []
+    interoperabilityModuleAsset.terminatedStateAccounts = []
+    interoperabilityModuleAsset.terminatedOutboxAccounts = []
+
+    data = encode(genesisInteroperabilityStoreSchema, interoperabilityModuleAsset)
+    return {"module": MODULE_NAME_INTEROPERABILITY, "data": data}
 ```
 
 ##### PoS module
@@ -281,12 +301,12 @@ def computePoSGenesisAsset():
 
     posModuleAsset.genesisData = {
         "initRounds": NUM_INIT_ROUNDS
-        "initValidators": [ validators.address for validator in posModuleAsset.validators]
+        "initValidators": [validators.address for validator in posModuleAsset.validators]
 
     }
 
     data = encode(genesisPoSStoreSchema, posModuleAsset)
-    return {"module": MODULE_NAME_PoS, "data": data}
+    return {"module": MODULE_NAME_POS, "data": data}
 ```
 
 ##### Token module
@@ -355,21 +375,6 @@ def computeTokenGenesisAsset():
     return {"module": MODULE_NAME_TOKEN, "data": data}
 ```
 
-### Fee module
-
-The Lisk DEX v1 blockchain utilizes the Fee module defined in [LIP 0048][lip-0048] with one key protocol modification: Instead of a burning a part of the fee, the respective amount is transferred to the validator incentives account with address `ADDRESS_VALIDATOR_INCENTIVES`, see the [DEX Incentives module][dex-incentives-module] for the definition of that account. This means every occurrence of burning fees in the Fee module, i.e.,
-
-```
-Token.burn(address, tokenID, amount),
-```
-should be replaced by a transfer of that amount to the address `ADDRESS_VALIDATOR_INCENTIVES`, i.e.,
-
-```
-Token.transfer(address, ADDRESS_VALIDATOR_INCENTIVES, tokenID, amount).
-```
-
-Further, the property `burntAmount` in the events [Generator Fee Processed][lip-0048#generatorfeeprocessed] and [Relayer Fee Processed][lip-0048#relayerfeeprocessed] should be renamed to `sharedAmountValidators`.
-
 ### Dynamic Block Rewards module
 
 The reward brackets for the [Dynamic Block Rewards][lip-0071] are given in the following table.
@@ -398,10 +403,9 @@ TBD
 [lip-0043#mainchain-registration-command-1]: https://github.com/LiskHQ/lips/blob/main/proposals/lip-0043.md#mainchain-registration-command-1
 [lip-0044]: https://github.com/LiskHQ/lips/blob/main/proposals/lip-0044.md
 [lip-0045]: https://github.com/LiskHQ/lips/blob/main/proposals/lip-0045.md
+[lip-0045#genesis-assets-schema]: https://github.com/LiskHQ/lips/blob/main/proposals/lip-0045.md#genesis-assets-schema
 [lip-0046]: https://github.com/LiskHQ/lips/blob/main/proposals/lip-0046.md
 [lip-0048]: https://github.com/LiskHQ/lips/blob/main/proposals/lip-0048.md
-[lip-0048#generatorfeeprocessed]: https://github.com/LiskHQ/lips/blob/main/proposals/lip-0048.md#generatorfeeprocessed
-[lip-0048#relayerfeeprocessed]: https://github.com/LiskHQ/lips/blob/main/proposals/lip-0048.md#relayerfeeprocessed
 [lip-0048#payfee]: https://github.com/LiskHQ/lips/blob/main/proposals/lip-0048.md#payfee
 [lip-0051]: https://github.com/LiskHQ/lips/blob/main/proposals/lip-0051.md
 [lip-0051#genesis-assets-schema]: https://github.com/LiskHQ/lips/blob/main/proposals/lip-0051.md#genesis-assets-schema
