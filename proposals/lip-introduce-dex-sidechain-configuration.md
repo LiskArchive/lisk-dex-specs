@@ -78,6 +78,7 @@ The table below defines some constants and notation used in the specifications b
 | `ADDRESS_LENGTH`              | `uint32`  |   20       | The number of bytes of an address.                    |
 | `TOKEN_ID_DEX`                | `bytes`   |   TBD      | The token ID of the native token of the Lisk DEX chain. |
 | `ALL_SUPPORTED_TOKENS_KEY`    | `bytes `  |   see [Token module][lip-0051]  | An internal constant of the Token module. |
+| `ADDRESS_LIQUIDITY_PROVIDER_INCENTIVES`| `bytes`   |   see  [DEX module][dex-module] | The address of the liquidity provider incentives account. |
 | `ADDRESS_VALIDATOR_INCENTIVES`| `bytes`   |   see  [DEX module][dex-module] | The address of the validator incentives account. |
 | `ED25519_PUBLIC_KEY_LENGTH`   |`uint32`   | 32          | Length in bytes of an Ed25519 public keys.           |
 | `BLS_PUBLIC_KEY_LENGTH`       |`uint32`   | 48          | Length in bytes of a BLS public key.                 |
@@ -311,7 +312,9 @@ def computePoSGenesisAsset():
 
 ##### Token module
 
-Let `tokenDistribution` be an object defining the initial distribution of the DEX native token, i.e., a list of addresses and the associated initial balance of DEX native tokens, following `tokenDistributionSchema` defined below.
+Let `tokenDistribution` be an object defining the initial distribution of the DEX native token, i.e., a list of addresses and the associated initial balance of DEX native tokens, following `tokenDistributionSchema` defined below. 
+The array `tokenDistribution.accounts` must contain an entry for the addresses `ADDRESS_LIQUIDITY_PROVIDER_INCENTIVES` and `ADDRESS_VALIDATOR_INCENTIVES` both with `balance` property equal to `0` so the corresponding accounts are initialized during the processing of the genesis block.
+It further has to be ensured that the addresses in `tokenDistribution.accounts` are unique.
 
 ```java
 tokenDistributionSchema = {
@@ -355,7 +358,7 @@ def computeTokenGenesisAsset():
             "tokenID": TOKEN_ID_DEX,
             "availableBalance": account.balance,
             "lockedBalances": []
-        }
+        })
         totalSupply += account.balance
     sort tokenModuleAsset.userSubstore lexicographically by address property
 
