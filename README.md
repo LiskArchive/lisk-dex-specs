@@ -1,3 +1,4 @@
+![Research img](https://github.com/LiskHQ/lisk-dex-research/assets/101553630/8ee6d236-4563-4811-a457-95cf79a43931)
 Welcome to the LISK-DEX-RESEARCH repository where community members can propose changes to the Lisk DEX protocol and its software implementation.
 ## Contributing
 Before contributing please read carefully the following [guidelines](proposals/lip-0001.md).
