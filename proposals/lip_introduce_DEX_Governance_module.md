@@ -135,7 +135,7 @@ We define the following constants:
 |`QUORUM_DURATION`|`uint32`|130000|Length of the quorum period in blocks. After this period the quorum is checked.|
 |`FEE_PROPOSAL_CREATION`|`uint64`|5000 * 10^8|Amount of fee to be paid for proposal creation in DEX native tokens.|
 |`MINIMAL_BALANCE_PROPOSE`|`uint64`|100000 * 10^8|Minimal amount of DEX native tokens an account should have to create a proposal (including PoS locked tokens).|
-|`QUORUM_PERCENTAGE`|`uint32`|10000|Relative amount of votes required for a proposal to pass the quorum, in parts-per-million of the amount of the total supply.|
+|`QUORUM_PERCENTAGE`|`uint32`|100000|Relative amount of votes required for a proposal to pass the quorum, in parts-per-million of the amount of the total supply.|
 |`MAX_NUM_RECORDED_VOTES`|`uint32`|100|Maximal number of proposals allowed to exist simultaneously.|
 |`MAX_LENGTH_PROPOSAL_TEXT`|`uint32`|10*1024|The maximal allowed length for proposal text, in bytes.|
 |`MAX_LENGTH_METADATA_TITLE`|`uint32`|124|The maximal allowed length for data in the `title` property in proposal metadata, in bytes. |
@@ -356,12 +356,12 @@ votesSchema = {
 indexSchema = {
     "type": "object",
     "required": [
-        "newestIndex",
+        "nextIndex",
         "nextOutcomeCheckIndex",
         "nextQuorumCheckIndex"
     ],
     "properties": {
-        "newestIndex": {
+        "nextIndex": {
             "type": "uint32",
             "fieldNumber": 1
         },
@@ -378,7 +378,7 @@ indexSchema = {
 ```
 
 ##### Properties
-- `newestIndex`: The proposal index of the last created proposal.
+- `nextIndex`: The proposal index of the next proposal to be created.
 - `nextOutcomeCheckIndex`: The proposal index of the next proposal for which the vote duration still has not elapsed. Note that this proposal could be not active if it failed quorum.
 - `nextQuorumCheckIndex`: The proposal index of the oldest active proposal for which the quorum was not yet checked.
 
@@ -444,7 +444,7 @@ The function [payFee][payFee] is defined in the Fee module.
 ```python
 def execute(trs: Transaction) -> None:
     # non-trivial verificaiton checks
-    if not hasEnded(indexStore.newestIndex - MAX_NUM_RECORDED_VOTES + 1, currentHeight, VOTE_DURATION):
+    if not hasEnded(indexStore.nextIndex - MAX_NUM_RECORDED_VOTES, currentHeight, VOTE_DURATION):
         emitProposalCreationFailedEvent(CREATION_FAILED_LIMIT_RECORDED_VOTES)
         raise Exception("Limit of proposals with recoded votes is reached")
     if trs.params.type == PROPOSAL_TYPE_INCENTIVIZATION and not DEX.poolExists(content.poolID):
@@ -453,7 +453,7 @@ def execute(trs: Transaction) -> None:
 
     # command execution
     Fee.payFee(FEE_PROPOSAL_CREATION)
-    index = indexStore.newestIndex + 1
+    index = indexStore.nextIndex
     currentHeight = height of the block containing trs
     proposalsStore[index] = encode(proposalSchema, {
         "creationHeight": currentHeight,
@@ -464,7 +464,7 @@ def execute(trs: Transaction) -> None:
         "content": trs.params.content,
         "status": PROPOSAL_STATUS_ACTIVE
     })
-    indexStore.newestIndex = index
+    indexStore.nextIndex = index + 1
 
     senderAddress = SHA256(trs.senderPublicKey)[:LENGTH_ADDRESS]
     emitEvent(
@@ -960,7 +960,7 @@ def initGenesisState(b: GenesisBlock) -> None:
     # initialize index substore
     nextOutcomeCheckIndex = 0
     nextQuorumCheckIndex = 0
-    newestIndex = length(proposalsStore) - 1
+    nextIndex = length(proposalsStore)
     for i in range(length(proposalsStore)):
         # proposals substore is already initialized
         if not hasEnded(i, height, VOTE_DURATION):
@@ -971,7 +971,7 @@ def initGenesisState(b: GenesisBlock) -> None:
         if not hasEnded(i, height, QUORUM_DURATION):
             nextQuorumCheckIndex = i
             break
-    indexStore = encode(indexSchema, { "newestIndex": newestIndex,
+    indexStore = encode(indexSchema, { "nextIndex": nextIndex,
         "nextOutcomeCheckIndex": nextOutcomeCheckIndex,
         "nextQuorumCheckIndex": nextQuorumCheckIndex
     })
