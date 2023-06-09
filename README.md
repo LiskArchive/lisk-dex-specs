@@ -1,4 +1,4 @@
-![specifications_banner](https://github.com/LiskHQ/lisk-dex-specs/assets/101553630/f4d29aa8-a550-4c6b-919c-9d13d49bc68c
+![specifications_banner](https://github.com/LiskHQ/lisk-dex-specs/assets/101553630/f4d29aa8-a550-4c6b-919c-9d13d49bc68c)
 
 ## Specifications
 | Number | Specifications | Author |
