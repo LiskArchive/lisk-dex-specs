@@ -1,6 +1,6 @@
 ![Research img](https://github.com/LiskHQ/lisk-dex-research/assets/101553630/8ee6d236-4563-4811-a457-95cf79a43931)
 
-## Proposals
+## Specifications
 | Number | Specifications | Author |
 |--------|-------|--------|
 | [0001](proposals/lip-0001.md) | Introduce DEX module | Iker Alustiza, Jan Hackfeld, Sergey Shemyakov |
