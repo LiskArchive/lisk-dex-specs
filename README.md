@@ -3,7 +3,7 @@
 ## Specifications
 | Number | Specifications | Author |
 |--------|-------|--------|
-| [ID:0001]([proposals/lip-0001.md](https://github.com/LiskHQ/lisk-dex-specs/blob/main/specifications/0001.md)) | Introduce DEX module | Iker Alustiza, Jan Hackfeld, Sergey Shemyakov 
+| [ID:0001](specifications/0001.md) | Introduce DEX module | Iker Alustiza, Jan Hackfeld, Sergey Shemyakov 
 | [ID: 0002]([proposals/lip-0001.md](https://github.com/LiskHQ/lisk-dex-specs/blob/main/specifications/0002.md)) | Define liquidity provider interactions for DEX module | Jan Hackfeld 
 | [ID: 0003]([proposals/lip-0001.md](https://github.com/LiskHQ/lisk-dex-specs/blob/main/specifications/0003.md)) | Define swap interaction for DEX module | Iker Alustiza, Sergey Shemyakov| 
 | [ID: 0004]([proposals/lip-0001.md](https://github.com/LiskHQ/lisk-dex-specs/blob/main/specifications/0004.md)) | Introduce DEX incentives module | Sergey Shemyakov | 
