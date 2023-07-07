@@ -9,3 +9,4 @@
 | [0004](specifications/0004.md) | Introduce DEX incentives module | Sergey Shemyakov | 
 | [0005](specifications/0005.md) | Introduce DEX Governance module | Sergey Shemyakov | 
 | [0006](specifications/0006.md) | Define DEX sidechain configuration | Jan Hackfeld 
+| [0007](specifications/0007.md) | Define cross-chain swaps | Vikas Jaiman 
